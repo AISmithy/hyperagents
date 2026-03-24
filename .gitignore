@@ -1,6 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 node_modules/
 dist/
 .DS_Store
+.run/
+frontend/.env.local

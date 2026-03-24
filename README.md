@@ -44,6 +44,33 @@ docs/
 
 ## Step By Step
 
+### 0. One-command local run
+
+If you want the backend and frontend started together:
+
+```powershell
+./run.ps1
+```
+
+To stop both services later:
+
+```powershell
+./stop.ps1
+```
+
+Default URLs:
+
+- Frontend: `http://127.0.0.1:4173`
+- Backend: `http://127.0.0.1:8011/api`
+
+The script will:
+
+- find Python 3.11+ and Node.js
+- install missing backend/frontend dependencies
+- write `frontend/.env.local` with the backend API URL
+- start both services
+- save logs and PID files under `.run/`
+
 ### 1. Backend setup
 
 Requirements:
