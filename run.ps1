@@ -13,6 +13,23 @@ $RunDir = Join-Path $Root ".run"
 
 New-Item -ItemType Directory -Force $RunDir | Out-Null
 
+function Import-EnvFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    foreach ($line in Get-Content $Path) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) {
+            continue
+        }
+        $parts = $trimmed.Split("=", 2)
+        [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), "Process")
+    }
+}
+
 function Get-RunningProcess {
     param([string]$PidFile)
 
@@ -99,7 +116,7 @@ function Find-Npm {
 function Ensure-BackendDependencies {
     param([string]$PythonExe)
 
-    $check = & $PythonExe -c "import fastapi, uvicorn" 2>$null
+    & $PythonExe -c "import fastapi, uvicorn, openai" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         return
     }
@@ -126,6 +143,9 @@ function Ensure-FrontendDependencies {
         throw "Frontend dependency installation failed."
     }
 }
+
+Import-EnvFile (Join-Path $Root ".env.local")
+Import-EnvFile (Join-Path $BackendDir ".env.local")
 
 $PythonExe = Find-Python
 $NodeExe = Find-Node

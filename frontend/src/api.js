@@ -10,7 +10,8 @@ async function request(path, options = {}) {
   });
 
   if (!response.ok) {
-    const message = await response.text();
+    const body = await response.json().catch(() => null);
+    const message = body?.detail ?? (await response.text());
     throw new Error(message || `Request failed with status ${response.status}`);
   }
 
@@ -29,5 +30,12 @@ export function runIterations(iterations) {
   return request("/run", {
     method: "POST",
     body: JSON.stringify({ iterations }),
+  });
+}
+
+export function reviewSubmission(payload) {
+  return request("/review", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }

@@ -19,6 +19,7 @@ The first domain is a deterministic paper-review simulator. That keeps the frame
 - Self-modification of task policy and meta policy
 - Evaluation on train and test review examples
 - React dashboard to inspect archive state, progress, and the best agent
+- Optional OpenAI-backed mutation planning and live abstract review
 
 ## Project Structure
 
@@ -28,6 +29,8 @@ backend/
     datasets.py
     engine.py
     main.py
+    openai_service.py
+    settings.py
   pyproject.toml
 frontend/
   src/
@@ -67,11 +70,37 @@ The script will:
 
 - find Python 3.11+ and Node.js
 - install missing backend/frontend dependencies
+- load `.env.local` if present
 - write `frontend/.env.local` with the backend API URL
 - start both services
 - save logs and PID files under `.run/`
 
-### 1. Backend setup
+### 1. OpenAI integration
+
+Do not paste API keys into chat, code, or git history. If a key has already been pasted, revoke it and create a new one.
+
+Create `.env.local` at the repo root from `.env.example` and set:
+
+```powershell
+OPENAI_API_KEY=your_new_key
+OPENAI_MODEL=gpt-5-mini
+HYPERAGENTS_USE_OPENAI=1
+```
+
+Then run:
+
+```powershell
+./run.ps1
+```
+
+When enabled, the backend uses the OpenAI Responses API for:
+
+- mutation planning inside the hyperagent loop
+- live abstract review from the UI
+
+Without those variables, the app falls back to the deterministic local simulator.
+
+### 2. Backend setup
 
 Requirements:
 
@@ -84,14 +113,12 @@ cd backend
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e .
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8011
 ```
 
 If your machine uses `python` instead of `py`, replace the launcher accordingly.
 
-The API will start on `http://localhost:8000`.
-
-### 2. Frontend setup
+### 3. Frontend setup
 
 Requirements:
 
@@ -102,12 +129,11 @@ Commands:
 ```powershell
 cd frontend
 npm install
-npm run dev
+$env:VITE_API_BASE="http://127.0.0.1:8011/api"
+npm run dev -- --port 4173
 ```
 
-The UI expects the backend at `http://localhost:8000/api`. Override it with `VITE_API_BASE` if needed.
-
-### 3. Run the proof-of-concept
+### 4. Run the proof-of-concept
 
 1. Open the frontend.
 2. Click `Run Iterations`.
@@ -118,11 +144,12 @@ The UI expects the backend at `http://localhost:8000/api`. Override it with `VIT
    - meta focus metric
    - exploration strength
    - memory notes
+4. If OpenAI mode is enabled, use `Live Review` to score a draft title and abstract.
 
-### 4. Next extension points
+### 5. Next extension points
 
-- Replace the deterministic task agent with an LLM-backed task runner
-- Replace the heuristic meta agent with an LLM-driven code or prompt editor
+- Replace the deterministic task agent with a real benchmark-backed task runner
+- Replace JSON-only mutation planning with tool-using agent loops
 - Persist runs to SQLite or Postgres
 - Add multiple domains and cross-domain transfer runs
 - Add baseline modes such as `no self-improvement` and `no archive`
@@ -140,15 +167,16 @@ That is the smallest practical version of the hyperagent idea.
 
 ## Current Limitations
 
-- The initial implementation uses a simulated task domain, not a live FM-backed agent
+- The default domain is still a simulated task environment
+- OpenAI usage is optional and disabled by default
 - State is stored in memory only
 - The UI is intended for local experimentation, not production deployment
-- I could not run dependency installation in this environment because Python and Node runtimes are not installed here
+- ChatGPT app subscriptions and API billing are separate products; you need API access configured in the OpenAI platform account
 
 ## Recommended Next Step
 
 Start the backend and frontend, verify the loop works locally, then choose one of these directions:
 
-1. Add real LLM calls for the task agent
-2. Add real LLM calls for the meta agent
-3. Add a second benchmark domain to test transfer
+1. Make both the task agent and meta agent fully model-driven
+2. Add a real evaluation benchmark instead of the current simulator
+3. Add persistence and experiment tracking for repeated runs

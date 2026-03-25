@@ -3,9 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import random
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .datasets import TEST_PAPERS, TRAIN_PAPERS
+
+if TYPE_CHECKING:
+    from .openai_service import OpenAIHyperAgentService
 
 FEATURES = ("novelty", "rigor", "clarity", "reproducibility", "significance")
 STYLE_THRESHOLD_OFFSET = {
@@ -74,7 +77,8 @@ class ArchiveEntry:
 
 
 class HyperAgentEngine:
-    def __init__(self, seed: int = 7) -> None:
+    def __init__(self, llm_service: OpenAIHyperAgentService | None = None, seed: int = 7) -> None:
+        self._llm_service = llm_service
         self._seed = seed
         self._rng = random.Random(seed)
         self._train_positive_avgs = average_feature_map(
@@ -137,6 +141,7 @@ class HyperAgentEngine:
                 "contains task behavior and self-modification behavior."
             ),
             "iterations_completed": self.iterations_completed,
+            "provider": self._provider_snapshot(),
             "dataset": {
                 "train_size": len(TRAIN_PAPERS),
                 "test_size": len(TEST_PAPERS),
@@ -154,9 +159,14 @@ class HyperAgentEngine:
             key=lambda entry: (
                 entry.evaluation.fitness,
                 entry.evaluation.test_accuracy,
-                -entry.created_iteration,
+                entry.created_iteration,
             ),
         )
+
+    def review_submission(self, title: str, abstract: str) -> dict[str, Any]:
+        if self._llm_service is None:
+            raise RuntimeError("OpenAI integration is not configured.")
+        return self._llm_service.review_submission(title, abstract)
 
     def _build_initial_agent(self) -> HyperAgent:
         return HyperAgent(
@@ -206,6 +216,10 @@ class HyperAgentEngine:
         return self._rng.choices(self.archive, weights=weights, k=1)[0]
 
     def _mutate(self, parent: ArchiveEntry) -> HyperAgent:
+        llm_child = self._llm_mutation(parent)
+        if llm_child is not None:
+            return llm_child
+
         child_task = deepcopy(parent.agent.task_policy)
         child_meta = deepcopy(parent.agent.meta_policy)
         fp_count = parent.evaluation.false_positive_count
@@ -213,14 +227,18 @@ class HyperAgentEngine:
         fp_avgs = parent.evaluation.false_positive_feature_avgs
         fn_avgs = parent.evaluation.false_negative_feature_avgs
 
-        pressure_by_feature: dict[str, float] = {}
-        for feature in FEATURES:
-            pressure = 0.0
-            pressure += max(0.0, self._train_positive_avgs[feature] - fp_avgs[feature])
-            pressure += max(0.0, fn_avgs[feature] - self._train_negative_avgs[feature]) * 0.7
-            pressure_by_feature[feature] = round(pressure, 4)
+        if fp_count == 0 and fn_count == 0:
+            pressure_by_feature = {feature: 0.0 for feature in FEATURES}
+            focus_metric = parent.agent.meta_policy.focus_metric
+        else:
+            pressure_by_feature: dict[str, float] = {}
+            for feature in FEATURES:
+                pressure = 0.0
+                pressure += max(0.0, self._train_positive_avgs[feature] - fp_avgs[feature])
+                pressure += max(0.0, fn_avgs[feature] - self._train_negative_avgs[feature]) * 0.7
+                pressure_by_feature[feature] = round(pressure, 4)
+            focus_metric = max(pressure_by_feature, key=pressure_by_feature.get)
 
-        focus_metric = max(pressure_by_feature, key=pressure_by_feature.get)
         child_meta.focus_metric = focus_metric
 
         for index, feature in enumerate(FEATURES):
@@ -285,6 +303,70 @@ class HyperAgentEngine:
             generation=parent.agent.generation + 1,
             task_policy=child_task,
             meta_policy=child_meta,
+            lineage_notes=lineage_notes,
+        )
+
+    def _llm_mutation(self, parent: ArchiveEntry) -> HyperAgent | None:
+        if self._llm_service is None or not self._llm_service.is_enabled:
+            return None
+
+        proposal = self._llm_service.propose_mutation(parent)
+        if not proposal:
+            return None
+
+        task_policy = proposal.get("task_policy", {})
+        meta_policy = proposal.get("meta_policy", {})
+        raw_weights = task_policy.get("weights", {})
+
+        weights = {}
+        for feature in FEATURES:
+            weights[feature] = round(
+                clamp(float(raw_weights.get(feature, parent.agent.task_policy.weights[feature])), 0.25, 1.8),
+                3,
+            )
+
+        next_task = TaskPolicy(
+            weights=weights,
+            threshold=round(
+                clamp(float(task_policy.get("threshold", parent.agent.task_policy.threshold)), 2.4, 4.2),
+                3,
+            ),
+            review_style=task_policy.get("review_style", parent.agent.task_policy.review_style)
+            if task_policy.get("review_style") in {"balanced", "skeptical", "ambitious"}
+            else parent.agent.task_policy.review_style,
+        )
+
+        next_meta = MetaPolicy(
+            focus_metric=meta_policy.get("focus_metric", parent.agent.meta_policy.focus_metric)
+            if meta_policy.get("focus_metric") in FEATURES
+            else parent.agent.meta_policy.focus_metric,
+            weight_step=round(
+                clamp(float(meta_policy.get("weight_step", parent.agent.meta_policy.weight_step)), 0.04, 0.22),
+                3,
+            ),
+            threshold_step=round(
+                clamp(float(meta_policy.get("threshold_step", parent.agent.meta_policy.threshold_step)), 0.03, 0.14),
+                3,
+            ),
+            exploration_scale=round(
+                clamp(
+                    float(meta_policy.get("exploration_scale", parent.agent.meta_policy.exploration_scale)),
+                    0.05,
+                    0.45,
+                ),
+                3,
+            ),
+            memory=(parent.agent.meta_policy.memory + [proposal.get("memory_note", "LLM mutation executed.")])[-4:],
+        )
+
+        lineage_notes = (parent.agent.lineage_notes + [proposal.get("rationale", "LLM-guided mutation.")])[-6:]
+
+        return HyperAgent(
+            agent_id=self._new_agent_id(),
+            parent_id=parent.agent.agent_id,
+            generation=parent.agent.generation + 1,
+            task_policy=next_task,
+            meta_policy=next_meta,
             lineage_notes=lineage_notes,
         )
 
@@ -397,6 +479,19 @@ class HyperAgentEngine:
                 "archive_size": len(self.archive),
             }
         )
+
+    def _provider_snapshot(self) -> dict[str, Any]:
+        if self._llm_service is None:
+            return {
+                "mode": "heuristic",
+                "configured": False,
+                "has_api_key": False,
+                "client_ready": False,
+                "model": "",
+                "reason": "OpenAI integration is not configured.",
+                "last_error": "",
+            }
+        return self._llm_service.metadata()
 
     def _serialize_entry(self, entry: ArchiveEntry) -> dict[str, Any]:
         payload = asdict(entry)

@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useState } from "react";
-import { fetchState, resetState, runIterations } from "./api";
+import { fetchState, resetState, reviewSubmission, runIterations } from "./api";
 
 function formatPercent(value) {
   return `${Math.round(value * 100)}%`;
@@ -105,12 +105,29 @@ function AgentCard({ entry, selected, onSelect }) {
   );
 }
 
+function ProviderBadge({ provider }) {
+  const statusClass = provider.client_ready ? "provider-live" : "provider-fallback";
+
+  return (
+    <div className={`provider-badge ${statusClass}`}>
+      <strong>{provider.client_ready ? "OpenAI live" : "Heuristic fallback"}</strong>
+      <span>{provider.model || "no model configured"}</span>
+      <p>{provider.reason}</p>
+      {provider.last_error ? <p className="provider-error">{provider.last_error}</p> : null}
+    </div>
+  );
+}
+
 function App() {
   const [state, setState] = useState(null);
   const [iterations, setIterations] = useState(5);
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [reviewTitle, setReviewTitle] = useState("");
+  const [reviewAbstract, setReviewAbstract] = useState("");
+  const [reviewResult, setReviewResult] = useState(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
 
   useEffect(() => {
     loadState();
@@ -156,11 +173,30 @@ function App() {
       startTransition(() => {
         setState(nextState);
         setSelectedAgentId(nextState.best_agent.agent.agent_id);
+        setReviewResult(null);
       });
     } catch (resetError) {
       setError(resetError.message);
     } finally {
       setIsBusy(false);
+    }
+  }
+
+  async function handleReview() {
+    setReviewBusy(true);
+    setError("");
+    try {
+      const result = await reviewSubmission({
+        title: reviewTitle,
+        abstract: reviewAbstract,
+      });
+      startTransition(() => {
+        setReviewResult(result);
+      });
+    } catch (reviewError) {
+      setError(reviewError.message);
+    } finally {
+      setReviewBusy(false);
     }
   }
 
@@ -192,6 +228,7 @@ function App() {
             same evolving agent, then stores every discovered variant in an archive of stepping
             stones.
           </p>
+          <ProviderBadge provider={state.provider} />
         </div>
         <div className="hero-panel">
           <label htmlFor="iterations">Iterations</label>
@@ -212,6 +249,91 @@ function App() {
             </button>
           </div>
           {error ? <p className="error-text">{error}</p> : null}
+        </div>
+      </section>
+
+      <section className="detail-section">
+        <div className="panel-header">
+          <h3>Live Review</h3>
+          <p>Uses the configured OpenAI model when available.</p>
+        </div>
+        <div className="detail-layout review-layout">
+          <article className="detail-panel">
+            <h4>Draft Input</h4>
+            <label htmlFor="review-title" className="detail-label">
+              Title
+            </label>
+            <input
+              id="review-title"
+              value={reviewTitle}
+              onChange={(event) => setReviewTitle(event.target.value)}
+              placeholder="A self-improving archive of tool-using research agents"
+            />
+            <label htmlFor="review-abstract" className="detail-label top-gap">
+              Abstract
+            </label>
+            <textarea
+              id="review-abstract"
+              value={reviewAbstract}
+              onChange={(event) => setReviewAbstract(event.target.value)}
+              placeholder="Describe the proposed research system, benchmark, and evidence."
+              rows={8}
+            />
+            <div className="hero-actions">
+              <button
+                type="button"
+                onClick={handleReview}
+                disabled={
+                  reviewBusy ||
+                  !state.provider.client_ready ||
+                  reviewTitle.trim().length < 4 ||
+                  reviewAbstract.trim().length < 30
+                }
+              >
+                {reviewBusy ? "Reviewing..." : "Generate Review"}
+              </button>
+            </div>
+          </article>
+          <article className="detail-panel">
+            <h4>Review Output</h4>
+            {reviewResult ? (
+              <div className="review-result">
+                <div className="policy-grid">
+                  <div>
+                    <span className="detail-label">Recommendation</span>
+                    <strong>{reviewResult.recommendation}</strong>
+                  </div>
+                  <div>
+                    <span className="detail-label">Score</span>
+                    <strong>{reviewResult.score}</strong>
+                  </div>
+                </div>
+                <p className="summary-text">{reviewResult.summary}</p>
+                <div className="review-columns">
+                  <div>
+                    <span className="detail-label">Strengths</span>
+                    {(reviewResult.strengths ?? []).map((item) => (
+                      <p key={item} className="summary-text">
+                        {item}
+                      </p>
+                    ))}
+                  </div>
+                  <div>
+                    <span className="detail-label">Risks</span>
+                    {(reviewResult.risks ?? []).map((item) => (
+                      <p key={item} className="summary-text">
+                        {item}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="summary-text">
+                Enter a title and abstract, then generate a model review.
+              </p>
+            )}
+          </article>
         </div>
       </section>
 

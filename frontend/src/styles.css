@@ -396,3 +396,68 @@ input {
     flex-direction: column;
   }
 }
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 252, 246, 0.95);
+  padding: 0.85rem 1rem;
+  color: var(--text);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 11rem;
+}
+
+.provider-badge {
+  max-width: 34rem;
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 249, 240, 0.72);
+}
+
+.provider-badge strong,
+.provider-badge span,
+.provider-badge p {
+  display: block;
+}
+
+.provider-badge span,
+.provider-badge p,
+.provider-error {
+  color: var(--muted);
+}
+
+.provider-live {
+  border-color: rgba(17, 107, 68, 0.24);
+}
+
+.provider-fallback {
+  border-color: rgba(184, 88, 47, 0.24);
+}
+
+.review-layout {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+}
+
+.top-gap {
+  margin-top: 0.9rem;
+}
+
+.review-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}

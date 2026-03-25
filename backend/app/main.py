@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .engine import HyperAgentEngine
+from .openai_service import OpenAIHyperAgentService
+from .settings import get_settings
 
 app = FastAPI(
     title="Hyperagents API",
@@ -19,11 +21,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-engine = HyperAgentEngine()
+settings = get_settings()
+llm_service = OpenAIHyperAgentService(settings)
+engine = HyperAgentEngine(llm_service=llm_service)
 
 
 class RunRequest(BaseModel):
     iterations: int = Field(default=5, ge=1, le=100)
+
+
+class ReviewRequest(BaseModel):
+    title: str = Field(min_length=4, max_length=200)
+    abstract: str = Field(min_length=30, max_length=6000)
 
 
 @app.get("/")
@@ -54,3 +63,11 @@ def reset() -> dict:
 def run_iterations(request: RunRequest) -> dict:
     engine.run(request.iterations)
     return engine.snapshot()
+
+
+@app.post("/api/review")
+def review_submission(request: ReviewRequest) -> dict:
+    try:
+        return engine.review_submission(request.title, request.abstract)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
