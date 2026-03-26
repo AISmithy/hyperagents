@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useState } from "react";
-import { fetchState, resetState, reviewSubmission, runIterations } from "./api";
+import { fetchState, resetState, reviewRepository, runIterations } from "./api";
 
 function formatPercent(value) {
   return `${Math.round(value * 100)}%`;
@@ -124,8 +124,7 @@ function App() {
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [reviewTitle, setReviewTitle] = useState("");
-  const [reviewAbstract, setReviewAbstract] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
   const [reviewResult, setReviewResult] = useState(null);
   const [reviewBusy, setReviewBusy] = useState(false);
 
@@ -186,10 +185,7 @@ function App() {
     setReviewBusy(true);
     setError("");
     try {
-      const result = await reviewSubmission({
-        title: reviewTitle,
-        abstract: reviewAbstract,
-      });
+      const result = await reviewRepository(repoUrl);
       startTransition(() => {
         setReviewResult(result);
       });
@@ -224,9 +220,9 @@ function App() {
           <p className="eyebrow">HyperAgents-Inspired Framework</p>
           <h1>hyperagents</h1>
           <p className="hero-copy">
-            This proof-of-concept keeps both task behavior and self-improvement logic inside the
-            same evolving agent, then stores every discovered variant in an archive of stepping
-            stones.
+            Self-improving agents that review GitHub repositories. Each agent evolves its own
+            code-quality weights and decision threshold, storing every variant in an archive of
+            stepping stones.
           </p>
           <ProviderBadge provider={state.provider} />
         </div>
@@ -254,30 +250,20 @@ function App() {
 
       <section className="detail-section">
         <div className="panel-header">
-          <h3>Live Review</h3>
-          <p>Uses the configured OpenAI model when available.</p>
+          <h3>Live Repo Review</h3>
+          <p>Paste a public GitHub URL. Fetches the repo and uses OpenAI to review it.</p>
         </div>
         <div className="detail-layout review-layout">
           <article className="detail-panel">
-            <h4>Draft Input</h4>
-            <label htmlFor="review-title" className="detail-label">
-              Title
+            <h4>Repository Input</h4>
+            <label htmlFor="repo-url" className="detail-label">
+              GitHub URL
             </label>
             <input
-              id="review-title"
-              value={reviewTitle}
-              onChange={(event) => setReviewTitle(event.target.value)}
-              placeholder="A self-improving archive of tool-using research agents"
-            />
-            <label htmlFor="review-abstract" className="detail-label top-gap">
-              Abstract
-            </label>
-            <textarea
-              id="review-abstract"
-              value={reviewAbstract}
-              onChange={(event) => setReviewAbstract(event.target.value)}
-              placeholder="Describe the proposed research system, benchmark, and evidence."
-              rows={8}
+              id="repo-url"
+              value={repoUrl}
+              onChange={(event) => setRepoUrl(event.target.value)}
+              placeholder="https://github.com/owner/repo"
             />
             <div className="hero-actions">
               <button
@@ -286,11 +272,10 @@ function App() {
                 disabled={
                   reviewBusy ||
                   !state.provider.client_ready ||
-                  reviewTitle.trim().length < 4 ||
-                  reviewAbstract.trim().length < 30
+                  repoUrl.trim().length < 10
                 }
               >
-                {reviewBusy ? "Reviewing..." : "Generate Review"}
+                {reviewBusy ? "Reviewing..." : "Review Repository"}
               </button>
             </div>
           </article>
@@ -319,8 +304,8 @@ function App() {
                     ))}
                   </div>
                   <div>
-                    <span className="detail-label">Risks</span>
-                    {(reviewResult.risks ?? []).map((item) => (
+                    <span className="detail-label">Issues</span>
+                    {(reviewResult.issues ?? []).map((item) => (
                       <p key={item} className="summary-text">
                         {item}
                       </p>
@@ -330,7 +315,7 @@ function App() {
               </div>
             ) : (
               <p className="summary-text">
-                Enter a title and abstract, then generate a model review.
+                Enter a GitHub URL and click Review Repository.
               </p>
             )}
           </article>

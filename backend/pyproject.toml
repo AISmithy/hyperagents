@@ -16,3 +16,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+"app.prompts" = ["*.md"]

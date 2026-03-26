@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .engine import HyperAgentEngine
+from .github_service import GitHubService
 from .openai_service import OpenAIHyperAgentService
 from .settings import get_settings
 
@@ -24,15 +25,15 @@ app.add_middleware(
 settings = get_settings()
 llm_service = OpenAIHyperAgentService(settings)
 engine = HyperAgentEngine(llm_service=llm_service)
+github_service = GitHubService(token=settings.github_token)
 
 
 class RunRequest(BaseModel):
     iterations: int = Field(default=5, ge=1, le=100)
 
 
-class ReviewRequest(BaseModel):
-    title: str = Field(min_length=4, max_length=200)
-    abstract: str = Field(min_length=30, max_length=6000)
+class RepoReviewRequest(BaseModel):
+    repo_url: str = Field(min_length=10, max_length=500)
 
 
 @app.get("/")
@@ -65,9 +66,13 @@ def run_iterations(request: RunRequest) -> dict:
     return engine.snapshot()
 
 
-@app.post("/api/review")
-def review_submission(request: ReviewRequest) -> dict:
+@app.post("/api/review-repo")
+def review_repo(request: RepoReviewRequest) -> dict:
     try:
-        return engine.review_submission(request.title, request.abstract)
+        repo_data = github_service.fetch_repo_summary(request.repo_url)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return engine.review_repository(request.repo_url, repo_data)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

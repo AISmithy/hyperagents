@@ -5,16 +5,16 @@ from dataclasses import asdict, dataclass, field
 import random
 from typing import Any, TYPE_CHECKING
 
-from .datasets import TEST_PAPERS, TRAIN_PAPERS
+from .datasets import TEST_REPOS, TRAIN_REPOS
 
 if TYPE_CHECKING:
     from .openai_service import OpenAIHyperAgentService
 
-FEATURES = ("novelty", "rigor", "clarity", "reproducibility", "significance")
+FEATURES = ("maintainability", "security", "test_coverage", "documentation", "simplicity")
 STYLE_THRESHOLD_OFFSET = {
     "balanced": 0.0,
-    "skeptical": 0.09,
-    "ambitious": -0.09,
+    "strict": 0.09,
+    "lenient": -0.09,
 }
 
 
@@ -82,10 +82,10 @@ class HyperAgentEngine:
         self._seed = seed
         self._rng = random.Random(seed)
         self._train_positive_avgs = average_feature_map(
-            [paper for paper in TRAIN_PAPERS if paper["label"] == 1]
+            [repo for repo in TRAIN_REPOS if repo["label"] == 1]
         )
         self._train_negative_avgs = average_feature_map(
-            [paper for paper in TRAIN_PAPERS if paper["label"] == 0]
+            [repo for repo in TRAIN_REPOS if repo["label"] == 0]
         )
         self.reset()
 
@@ -135,7 +135,7 @@ class HyperAgentEngine:
         best = self.best_entry
         return {
             "project": "hyperagents",
-            "domain": "paper-review-simulator",
+            "domain": "code-review-simulator",
             "description": (
                 "A HyperAgents-inspired proof-of-concept where each agent "
                 "contains task behavior and self-modification behavior."
@@ -143,8 +143,8 @@ class HyperAgentEngine:
             "iterations_completed": self.iterations_completed,
             "provider": self._provider_snapshot(),
             "dataset": {
-                "train_size": len(TRAIN_PAPERS),
-                "test_size": len(TEST_PAPERS),
+                "train_size": len(TRAIN_REPOS),
+                "test_size": len(TEST_REPOS),
             },
             "best_agent": self._serialize_entry(best),
             "archive": [self._serialize_entry(entry) for entry in self.archive],
@@ -163,10 +163,10 @@ class HyperAgentEngine:
             ),
         )
 
-    def review_submission(self, title: str, abstract: str) -> dict[str, Any]:
+    def review_repository(self, repo_url: str, repo_data: dict[str, Any]) -> dict[str, Any]:
         if self._llm_service is None:
             raise RuntimeError("OpenAI integration is not configured.")
-        return self._llm_service.review_submission(title, abstract)
+        return self._llm_service.review_repository(repo_url, repo_data)
 
     def _build_initial_agent(self) -> HyperAgent:
         return HyperAgent(
@@ -175,22 +175,22 @@ class HyperAgentEngine:
             generation=0,
             task_policy=TaskPolicy(
                 weights={
-                    "novelty": 0.95,
-                    "rigor": 0.82,
-                    "clarity": 0.88,
-                    "reproducibility": 0.74,
-                    "significance": 0.93,
+                    "maintainability": 0.90,
+                    "security": 0.85,
+                    "test_coverage": 0.88,
+                    "documentation": 0.72,
+                    "simplicity": 0.78,
                 },
                 threshold=3.05,
                 review_style="balanced",
             ),
             meta_policy=MetaPolicy(
-                focus_metric="rigor",
+                focus_metric="security",
                 weight_step=0.12,
                 threshold_step=0.07,
                 exploration_scale=0.18,
                 memory=[
-                    "Initial reviewer is too impressionable. Watch for polished but weak papers."
+                    "Initial reviewer: watch for repos with good docs but poor security or no tests."
                 ],
             ),
             lineage_notes=[
@@ -263,13 +263,13 @@ class HyperAgentEngine:
                 clamp(child_task.threshold + child_meta.threshold_step, 2.4, 4.2),
                 3,
             )
-            child_task.review_style = "skeptical"
+            child_task.review_style = "strict"
         elif fn_count > fp_count:
             child_task.threshold = round(
                 clamp(child_task.threshold - child_meta.threshold_step, 2.4, 4.2),
                 3,
             )
-            child_task.review_style = "ambitious"
+            child_task.review_style = "lenient"
         else:
             child_task.review_style = "balanced"
 
@@ -332,7 +332,7 @@ class HyperAgentEngine:
                 3,
             ),
             review_style=task_policy.get("review_style", parent.agent.task_policy.review_style)
-            if task_policy.get("review_style") in {"balanced", "skeptical", "ambitious"}
+            if task_policy.get("review_style") in {"balanced", "strict", "lenient"}
             else parent.agent.task_policy.review_style,
         )
 
@@ -389,8 +389,8 @@ class HyperAgentEngine:
             )[-4:]
 
     def _evaluate_agent(self, agent: HyperAgent) -> Evaluation:
-        train_accuracy, false_positives, false_negatives = self._evaluate_dataset(agent, TRAIN_PAPERS)
-        test_accuracy, _, _ = self._evaluate_dataset(agent, TEST_PAPERS)
+        train_accuracy, false_positives, false_negatives = self._evaluate_dataset(agent, TRAIN_REPOS)
+        test_accuracy, _, _ = self._evaluate_dataset(agent, TEST_REPOS)
         summary = self._build_evaluation_summary(false_positives, false_negatives)
         return Evaluation(
             fitness=round(train_accuracy, 3),
@@ -421,16 +421,16 @@ class HyperAgentEngine:
                 false_negatives.append(paper)
         return correct / len(dataset), false_positives, false_negatives
 
-    def _predict(self, agent: HyperAgent, paper: dict[str, Any]) -> int:
+    def _predict(self, agent: HyperAgent, repo: dict[str, Any]) -> int:
         score = 0.0
         for feature, weight in agent.task_policy.weights.items():
-            score += paper[feature] * weight
+            score += repo[feature] * weight
 
-        if paper["rigor"] < 0.35:
-            score -= 0.12
-        if paper["reproducibility"] < 0.30:
+        if repo["security"] < 0.35:
+            score -= 0.15
+        if repo["test_coverage"] < 0.30:
             score -= 0.08
-        if paper["novelty"] > 0.78 and paper["rigor"] > 0.78:
+        if repo["maintainability"] > 0.78 and repo["security"] > 0.78:
             score += 0.08
 
         threshold = agent.task_policy.threshold + STYLE_THRESHOLD_OFFSET[agent.task_policy.review_style]
@@ -459,9 +459,9 @@ class HyperAgentEngine:
         fp_count = parent.evaluation.false_positive_count
         fn_count = parent.evaluation.false_negative_count
         if fp_count > fn_count:
-            return f"Raise standards around {focus_metric}; glossy submissions are slipping through."
+            return f"Raise bar on {focus_metric}; weak repos are slipping through as merge-ready."
         if fn_count > fp_count:
-            return f"Recover missed strong papers by rewarding {focus_metric} more explicitly."
+            return f"Recover missed healthy repos by rewarding {focus_metric} more explicitly."
         return f"Balance review policy and keep probing {focus_metric}."
 
     def _signed_noise(self, agent_id: str, feature: str, index: int) -> float:

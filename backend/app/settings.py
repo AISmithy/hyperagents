@@ -36,6 +36,7 @@ class Settings:
     openai_api_key: str
     openai_model: str
     use_openai: bool
+    github_token: str
 
     @property
     def has_api_key(self) -> bool:
@@ -48,4 +49,5 @@ def get_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5-mini").strip() or "gpt-5-mini",
         use_openai=_flag("HYPERAGENTS_USE_OPENAI", default=False),
+        github_token=os.getenv("GITHUB_TOKEN", "").strip(),
     )

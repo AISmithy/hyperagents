@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from functools import lru_cache
+from importlib.resources import files
 import json
 from typing import Any
 
@@ -10,6 +12,11 @@ try:
     from openai import OpenAI
 except ImportError:  # pragma: no cover
     OpenAI = None
+
+
+@lru_cache(maxsize=None)
+def _load_prompt(filename: str) -> str:
+    return files("app.prompts").joinpath(filename).read_text(encoding="utf-8").strip()
 
 
 class OpenAIHyperAgentService:
@@ -59,8 +66,8 @@ class OpenAIHyperAgentService:
         payload = {
             "agent": asdict(parent.agent),
             "evaluation": asdict(parent.evaluation),
-            "allowed_review_styles": ["balanced", "skeptical", "ambitious"],
-            "feature_names": ["novelty", "rigor", "clarity", "reproducibility", "significance"],
+            "allowed_review_styles": ["balanced", "strict", "lenient"],
+            "feature_names": ["maintainability", "security", "test_coverage", "documentation", "simplicity"],
             "weight_bounds": [0.25, 1.8],
             "threshold_bounds": [2.4, 4.2],
             "step_bounds": {
@@ -70,39 +77,15 @@ class OpenAIHyperAgentService:
             },
         }
 
-        prompt = (
-            "You are the meta-policy inside a self-improving hyperagent. "
-            "Given the parent agent state and evaluation, propose one child mutation. "
-            "Return JSON only with this exact shape: "
-            "{"
-            "\"task_policy\":{\"weights\":{\"novelty\":number,\"rigor\":number,\"clarity\":number,\"reproducibility\":number,\"significance\":number},"
-            "\"threshold\":number,\"review_style\":\"balanced|skeptical|ambitious\"},"
-            "\"meta_policy\":{\"focus_metric\":\"novelty|rigor|clarity|reproducibility|significance\","
-            "\"weight_step\":number,\"threshold_step\":number,\"exploration_scale\":number},"
-            "\"memory_note\":string,"
-            "\"rationale\":string"
-            "}. "
-            "Keep values inside the provided bounds and bias toward fixing the parent's observed errors."
-        )
+        prompt = _load_prompt("propose_mutation.md")
         return self._json_response(prompt, payload)
 
-    def review_submission(self, title: str, abstract: str) -> dict[str, Any]:
+    def review_repository(self, repo_url: str, repo_data: dict[str, Any]) -> dict[str, Any]:
         if not self.is_enabled:
             raise RuntimeError("OpenAI mode is not enabled.")
 
-        prompt = (
-            "You are an expert research reviewer. "
-            "Review the proposed paper abstract and return JSON only with this shape: "
-            "{"
-            "\"recommendation\":\"accept|weak_accept|borderline|weak_reject|reject\","
-            "\"score\":number,"
-            "\"strengths\":[string,string,string],"
-            "\"risks\":[string,string,string],"
-            "\"summary\":string"
-            "}. "
-            "Use a 1-10 score."
-        )
-        return self._json_response(prompt, {"title": title, "abstract": abstract})
+        prompt = _load_prompt("review_repository.md")
+        return self._json_response(prompt, {"repo_url": repo_url, "repo": repo_data})
 
     def _json_response(self, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:

@@ -33,9 +33,9 @@ export function runIterations(iterations) {
   });
 }
 
-export function reviewSubmission(payload) {
-  return request("/review", {
+export function reviewRepository(repoUrl) {
+  return request("/review-repo", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ repo_url: repoUrl }),
   });
 }
