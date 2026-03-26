@@ -37,6 +37,7 @@ class Settings:
     openai_model: str
     use_openai: bool
     github_token: str
+    db_path: str
 
     @property
     def has_api_key(self) -> bool:
@@ -45,9 +46,13 @@ class Settings:
 
 def get_settings() -> Settings:
     load_local_env()
+    backend_dir = Path(__file__).resolve().parents[1]
+    root_dir = backend_dir.parent
+    default_db = str(root_dir / "hyperagents.db")
     return Settings(
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5-mini").strip() or "gpt-5-mini",
         use_openai=_flag("HYPERAGENTS_USE_OPENAI", default=False),
         github_token=os.getenv("GITHUB_TOKEN", "").strip(),
+        db_path=os.getenv("HYPERAGENTS_DB_PATH", default_db).strip(),
     )

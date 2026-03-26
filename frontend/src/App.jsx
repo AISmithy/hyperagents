@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useState } from "react";
-import { fetchMetricsCsv, fetchState, resetState, reviewRepository, runIterations } from "./api";
+import { deleteRun, fetchMetricsCsv, fetchRuns, fetchState, loadRun, resetState, reviewRepository, runIterations } from "./api";
 
 function formatPercent(value) {
   return `${Math.round(value * 100)}%`;
@@ -93,6 +93,7 @@ const TABS = [
   { id: "archive", label: "Archive" },
   { id: "detail", label: "Agent Detail" },
   { id: "events", label: "Events" },
+  { id: "runs", label: "Runs" },
   { id: "review", label: "Live Review" },
 ];
 
@@ -126,11 +127,15 @@ function App() {
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [mode, setMode] = useState("hyperagent");
   const [activeTab, setActiveTab] = useState("overview");
+  const [runs, setRuns] = useState([]);
   const [repoUrl, setRepoUrl] = useState("");
   const [reviewResult, setReviewResult] = useState(null);
   const [reviewBusy, setReviewBusy] = useState(false);
 
-  useEffect(() => { loadState(); }, []);
+  useEffect(() => {
+    loadState();
+    fetchRuns().then(setRuns).catch(() => {});
+  }, []);
 
   async function loadState() {
     setIsBusy(true);
@@ -150,7 +155,12 @@ function App() {
     setError("");
     try {
       const next = await runIterations(Number(iterations));
-      startTransition(() => { setState(next); setSelectedAgentId(next.best_agent.agent.agent_id); });
+      const updatedRuns = await fetchRuns();
+      startTransition(() => {
+        setState(next);
+        setSelectedAgentId(next.best_agent.agent.agent_id);
+        setRuns(updatedRuns);
+      });
     } catch (e) { setError(e.message); }
     finally { setIsBusy(false); }
   }
@@ -160,14 +170,38 @@ function App() {
     setError("");
     try {
       const next = await resetState(mode);
+      const updatedRuns = await fetchRuns();
       startTransition(() => {
         setState(next);
         setSelectedAgentId(next.best_agent.agent.agent_id);
+        setRuns(updatedRuns);
         setReviewResult(null);
         setActiveTab("overview");
       });
     } catch (e) { setError(e.message); }
     finally { setIsBusy(false); }
+  }
+
+  async function handleLoadRun(runId) {
+    setIsBusy(true);
+    setError("");
+    try {
+      const next = await loadRun(runId);
+      startTransition(() => {
+        setState(next);
+        setSelectedAgentId(next.best_agent.agent.agent_id);
+        setMode(next.mode);
+        setActiveTab("overview");
+      });
+    } catch (e) { setError(e.message); }
+    finally { setIsBusy(false); }
+  }
+
+  async function handleDeleteRun(runId) {
+    try {
+      await deleteRun(runId);
+      setRuns((prev) => prev.filter((r) => r.run_id !== runId));
+    } catch (e) { setError(e.message); }
   }
 
   async function handleExportCsv() {
@@ -459,6 +493,64 @@ function App() {
               </article>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Tab: Runs ── */}
+      {activeTab === "runs" && (
+        <div className="tab-content">
+          <div className="panel-header">
+            <h3>Saved Runs</h3>
+            <p>Every reset creates a new run. Load one to restore its state and continue iterating.</p>
+          </div>
+          {runs.length === 0 ? (
+            <p className="summary-text">No runs saved yet. Run some iterations first.</p>
+          ) : (
+            <div className="runs-table">
+              <div className="runs-table-header">
+                <span>ID</span>
+                <span>UUID</span>
+                <span>Mode</span>
+                <span>Created</span>
+                <span>Iterations</span>
+                <span>Best Train</span>
+                <span>Best Test</span>
+                <span></span>
+              </div>
+              {runs.map((run) => (
+                <div
+                  key={run.run_id}
+                  className={`runs-row ${state?.run_id === run.run_id ? "active-run" : ""}`}
+                >
+                  <span className="runs-id">#{run.run_id}</span>
+                  <span className="runs-uuid muted">{run.run_uuid}</span>
+                  <span className={`runs-mode ${run.mode}`}>{run.mode}</span>
+                  <span className="muted">{run.created_at.replace("T", " ").replace("+00:00", "")}</span>
+                  <span>{run.iterations_completed}</span>
+                  <span className="score">{formatPercent(run.best_fitness)}</span>
+                  <span className="score">{formatPercent(run.best_test_accuracy)}</span>
+                  <span className="runs-actions">
+                    <button
+                      type="button"
+                      className="runs-btn"
+                      onClick={() => handleLoadRun(run.run_id)}
+                      disabled={isBusy}
+                    >
+                      Load
+                    </button>
+                    <button
+                      type="button"
+                      className="runs-btn danger"
+                      onClick={() => handleDeleteRun(run.run_id)}
+                      disabled={isBusy || state?.run_id === run.run_id}
+                    >
+                      Delete
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

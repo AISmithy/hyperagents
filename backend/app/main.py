@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from .database import Database
 from .engine import HyperAgentEngine
 from .github_service import GitHubService
 from .openai_service import OpenAIHyperAgentService
@@ -25,7 +26,8 @@ app.add_middleware(
 
 settings = get_settings()
 llm_service = OpenAIHyperAgentService(settings)
-engine = HyperAgentEngine(llm_service=llm_service)
+db = Database(settings.db_path)
+engine = HyperAgentEngine(llm_service=llm_service, db=db)
 github_service = GitHubService(token=settings.github_token)
 
 
@@ -73,6 +75,38 @@ def metrics_json() -> list:
 @app.get("/api/metrics/csv", response_class=PlainTextResponse)
 def metrics_csv() -> str:
     return engine.metrics_csv()
+
+
+# ── Run management ────────────────────────────────────────────────────────────
+
+@app.get("/api/runs")
+def list_runs() -> list:
+    return db.list_runs()
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: int) -> dict:
+    snapshot = db.load_run(run_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    return snapshot
+
+
+@app.post("/api/runs/{run_id}/load")
+def load_run(run_id: int) -> dict:
+    """Restore a past run into the active engine. Further iterations continue the same run."""
+    snapshot = db.load_run(run_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    engine.load_run_snapshot(snapshot)
+    return engine.snapshot()
+
+
+@app.delete("/api/runs/{run_id}")
+def delete_run(run_id: int) -> dict:
+    if not db.delete_run(run_id):
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    return {"deleted": run_id}
 
 
 @app.post("/api/run")

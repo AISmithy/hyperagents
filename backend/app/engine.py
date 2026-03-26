@@ -8,6 +8,7 @@ from typing import Any, TYPE_CHECKING
 from .datasets import TEST_REPOS, TRAIN_REPOS
 
 if TYPE_CHECKING:
+    from .database import Database
     from .openai_service import OpenAIHyperAgentService
 
 FEATURES = ("maintainability", "security", "test_coverage", "documentation", "simplicity")
@@ -80,8 +81,14 @@ VALID_MODES = {"hyperagent", "baseline"}
 
 
 class HyperAgentEngine:
-    def __init__(self, llm_service: OpenAIHyperAgentService | None = None, seed: int = 7) -> None:
+    def __init__(
+        self,
+        llm_service: OpenAIHyperAgentService | None = None,
+        db: Database | None = None,
+        seed: int = 7,
+    ) -> None:
         self._llm_service = llm_service
+        self._db = db
         self._seed = seed
         self._rng = random.Random(seed)
         self._train_positive_avgs = average_feature_map(
@@ -94,6 +101,7 @@ class HyperAgentEngine:
         self._freeze_meta = False
         self._seed_meta_policy: MetaPolicy | None = None
         self._last_mutation_was_llm = False
+        self._run_id: int | None = None
         self.reset()
 
     def reset(self, mode: str = "hyperagent") -> None:
@@ -117,6 +125,11 @@ class HyperAgentEngine:
         )
         self.archive.append(initial_entry)
         self._record_progress(initial_entry)
+
+        if self._db is not None:
+            self._run_id = self._db.create_run(self._mode, self._seed)
+            self._db.save_archive_entry(self._run_id, self._serialize_entry(initial_entry))
+            self._db.save_progress(self._run_id, self.progress[-1])
 
     def run(self, iterations: int) -> None:
         for _ in range(iterations):
@@ -144,6 +157,17 @@ class HyperAgentEngine:
             self.recent_events = self.recent_events[-12:]
             self._record_progress(entry)
 
+            if self._db is not None and self._run_id is not None:
+                self._db.save_archive_entry(self._run_id, self._serialize_entry(entry))
+                self._db.save_progress(self._run_id, self.progress[-1])
+                self._db.save_event(self._run_id, self.recent_events[-1])
+                self._db.update_run(
+                    self._run_id,
+                    self.iterations_completed,
+                    self.best_entry.evaluation.fitness,
+                    self.best_entry.evaluation.test_accuracy,
+                )
+
     def snapshot(self) -> dict[str, Any]:
         best = self.best_entry
         return {
@@ -154,6 +178,7 @@ class HyperAgentEngine:
                 "contains task behavior and self-modification behavior."
             ),
             "mode": self._mode,
+            "run_id": self._run_id,
             "iterations_completed": self.iterations_completed,
             "provider": self._provider_snapshot(),
             "dataset": {
@@ -179,6 +204,78 @@ class HyperAgentEngine:
         for row in rows:
             lines.append(",".join(str(row.get(col, "")) for col in columns))
         return "\n".join(lines)
+
+    def load_run_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Restore engine in-memory state from a persisted run snapshot.
+
+        Further calls to run() will append to the same DB run record so the
+        full lineage stays in one place.
+        """
+        mode = snapshot.get("mode", "hyperagent")
+        self._mode = mode
+        self._freeze_meta = mode == "baseline"
+        self._rng = random.Random(self._seed)
+        self._last_mutation_was_llm = False
+        self.iterations_completed = snapshot["iterations_completed"]
+        self.archive = [self._deserialize_entry(e) for e in snapshot["archive"]]
+        self.progress = [dict(r) for r in snapshot["progress"]]
+        # recent_events in snapshot is newest-first; store oldest-first internally
+        self.recent_events = list(reversed(snapshot["recent_events"]))
+
+        # Advance _next_id past all existing IDs to prevent collisions
+        self._next_id = 0
+        for entry in self.archive:
+            try:
+                n = int(entry.agent.agent_id.split("-")[1])
+                if n >= self._next_id:
+                    self._next_id = n + 1
+            except (IndexError, ValueError):
+                pass
+
+        # Restore seed meta policy from the generation-0 agent
+        seed_entries = [e for e in self.archive if e.agent.generation == 0]
+        if seed_entries:
+            self._seed_meta_policy = deepcopy(seed_entries[0].agent.meta_policy)
+
+        # Continue appending to the same DB run
+        self._run_id = snapshot.get("run_id")
+
+    def _deserialize_entry(self, data: dict[str, Any]) -> ArchiveEntry:
+        agent_data = data["agent"]
+        ev_data = data["evaluation"]
+        tp = agent_data["task_policy"]
+        mp = agent_data["meta_policy"]
+        return ArchiveEntry(
+            agent=HyperAgent(
+                agent_id=agent_data["agent_id"],
+                parent_id=agent_data.get("parent_id"),
+                generation=agent_data["generation"],
+                task_policy=TaskPolicy(
+                    weights=tp["weights"],
+                    threshold=tp["threshold"],
+                    review_style=tp["review_style"],
+                ),
+                meta_policy=MetaPolicy(
+                    focus_metric=mp["focus_metric"],
+                    weight_step=mp["weight_step"],
+                    threshold_step=mp["threshold_step"],
+                    exploration_scale=mp["exploration_scale"],
+                    memory=mp.get("memory", []),
+                ),
+                lineage_notes=agent_data.get("lineage_notes", []),
+            ),
+            evaluation=Evaluation(
+                fitness=ev_data["fitness"],
+                train_accuracy=ev_data["train_accuracy"],
+                test_accuracy=ev_data["test_accuracy"],
+                false_positive_count=ev_data["false_positive_count"],
+                false_negative_count=ev_data["false_negative_count"],
+                false_positive_feature_avgs=ev_data["false_positive_feature_avgs"],
+                false_negative_feature_avgs=ev_data["false_negative_feature_avgs"],
+                summary=ev_data["summary"],
+            ),
+            created_iteration=data["created_iteration"],
+        )
 
     @property
     def best_entry(self) -> ArchiveEntry:

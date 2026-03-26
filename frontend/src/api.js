@@ -50,3 +50,15 @@ export function reviewRepository(repoUrl) {
     body: JSON.stringify({ repo_url: repoUrl }),
   });
 }
+
+export function fetchRuns() {
+  return request("/runs");
+}
+
+export function loadRun(runId) {
+  return request(`/runs/${runId}/load`, { method: "POST" });
+}
+
+export function deleteRun(runId) {
+  return request(`/runs/${runId}`, { method: "DELETE" });
+}
