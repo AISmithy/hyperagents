@@ -91,12 +91,10 @@ class HyperAgentEngine:
         self._db = db
         self._seed = seed
         self._rng = random.Random(seed)
-        self._train_positive_avgs = average_feature_map(
-            [repo for repo in TRAIN_REPOS if repo["label"] == 1]
-        )
-        self._train_negative_avgs = average_feature_map(
-            [repo for repo in TRAIN_REPOS if repo["label"] == 0]
-        )
+        # Extra repos injected from accounts — persists across resets
+        self._extra_train_repos: list[dict] = []
+        self._extra_test_repos: list[dict] = []
+        self._recalculate_averages()
         self._mode = "hyperagent"
         self._freeze_meta = False
         self._seed_meta_policy: MetaPolicy | None = None
@@ -182,8 +180,12 @@ class HyperAgentEngine:
             "iterations_completed": self.iterations_completed,
             "provider": self._provider_snapshot(),
             "dataset": {
-                "train_size": len(TRAIN_REPOS),
-                "test_size": len(TEST_REPOS),
+                "train_size": len(self._get_train_repos()),
+                "test_size": len(self._get_test_repos()),
+                "base_train_size": len(TRAIN_REPOS),
+                "base_test_size": len(TEST_REPOS),
+                "extra_train_size": len(self._extra_train_repos),
+                "extra_test_size": len(self._extra_test_repos),
             },
             "best_agent": self._serialize_entry(best),
             "archive": [self._serialize_entry(entry) for entry in self.archive],
@@ -286,6 +288,33 @@ class HyperAgentEngine:
                 entry.evaluation.test_accuracy,
                 entry.created_iteration,
             ),
+        )
+
+    def set_account_repos(self, repos: list[dict]) -> None:
+        """Replace the extra dataset from accounts and recalculate averages.
+
+        The first 80 % of repos go to train; the remaining 20 % to test.
+        Call reset() afterwards to re-initialise the evolutionary loop with
+        the updated dataset sizes.
+        """
+        n_train = max(0, int(len(repos) * 0.8))
+        self._extra_train_repos = repos[:n_train]
+        self._extra_test_repos = repos[n_train:]
+        self._recalculate_averages()
+
+    def _get_train_repos(self) -> list[dict]:
+        return TRAIN_REPOS + self._extra_train_repos
+
+    def _get_test_repos(self) -> list[dict]:
+        return TEST_REPOS + self._extra_test_repos
+
+    def _recalculate_averages(self) -> None:
+        all_train = self._get_train_repos()
+        self._train_positive_avgs = average_feature_map(
+            [r for r in all_train if r["label"] == 1]
+        )
+        self._train_negative_avgs = average_feature_map(
+            [r for r in all_train if r["label"] == 0]
         )
 
     def review_repository(self, repo_url: str, repo_data: dict[str, Any]) -> dict[str, Any]:
@@ -528,8 +557,8 @@ class HyperAgentEngine:
             )[-4:]
 
     def _evaluate_agent(self, agent: HyperAgent) -> Evaluation:
-        train_accuracy, false_positives, false_negatives = self._evaluate_dataset(agent, TRAIN_REPOS)
-        test_accuracy, _, _ = self._evaluate_dataset(agent, TEST_REPOS)
+        train_accuracy, false_positives, false_negatives = self._evaluate_dataset(agent, self._get_train_repos())
+        test_accuracy, _, _ = self._evaluate_dataset(agent, self._get_test_repos())
         summary = self._build_evaluation_summary(false_positives, false_negatives)
         return Evaluation(
             fitness=round(train_accuracy, 3),

@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useState } from "react";
-import { deleteRun, fetchMetricsCsv, fetchRuns, fetchState, loadRun, resetState, reviewRepository, runIterations } from "./api";
+import { addAccount, applyAllAccounts, deleteAccount, deleteRun, fetchAccountRepos, fetchAccounts, fetchMetricsCsv, fetchRuns, fetchState, loadRun, resetState, reviewRepository, runIterations } from "./api";
 
 function formatPercent(value) {
   return `${Math.round(value * 100)}%`;
@@ -89,15 +89,16 @@ function ProviderBadge({ provider }) {
 // ── Tab nav ───────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: "overview", label: "Overview" },
-  { id: "archive", label: "Archive" },
-  { id: "detail", label: "Agent Detail" },
-  { id: "events", label: "Events" },
-  { id: "runs", label: "Runs" },
-  { id: "review", label: "Live Review" },
+  { id: "overview",  label: "Overview" },
+  { id: "accounts",  label: "Accounts" },
+  { id: "archive",   label: "Archive" },
+  { id: "detail",    label: "Agent Detail" },
+  { id: "events",    label: "Events" },
+  { id: "runs",      label: "Runs" },
+  { id: "review",    label: "Live Review" },
 ];
 
-function TabNav({ active, onChange, archiveCount }) {
+function TabNav({ active, onChange, archiveCount, accountCount }) {
   return (
     <nav className="tab-nav">
       {TABS.map((tab) => (
@@ -111,11 +112,31 @@ function TabNav({ active, onChange, archiveCount }) {
           {tab.id === "archive" && archiveCount > 0 && (
             <span className="tab-badge">{archiveCount}</span>
           )}
+          {tab.id === "accounts" && accountCount > 0 && (
+            <span className="tab-badge">{accountCount}</span>
+          )}
         </button>
       ))}
     </nav>
   );
 }
+
+// ── Feature bar ───────────────────────────────────────────────────────────────
+
+function FeatureBar({ value }) {
+  const pct = Math.round(value * 100);
+  const color = pct >= 70 ? "#1a7d79" : pct >= 45 ? "#b8582f" : "#c0392b";
+  return (
+    <span className="feature-bar-wrap" title={`${pct}%`}>
+      <span className="feature-bar-track">
+        <span className="feature-bar-fill" style={{ width: `${pct}%`, background: color }} />
+      </span>
+      <span className="feature-bar-label">{pct}</span>
+    </span>
+  );
+}
+
+const PROFILES = ["premium", "startup", "legacy", "academic", "security_focused", "mixed"];
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
@@ -132,9 +153,17 @@ function App() {
   const [reviewResult, setReviewResult] = useState(null);
   const [reviewBusy, setReviewBusy] = useState(false);
 
+  // accounts
+  const [accounts, setAccounts] = useState([]);
+  const [accountForm, setAccountForm] = useState({ name: "", platform: "synthetic", profile: "mixed", n_repos: 10 });
+  const [accountsBusy, setAccountsBusy] = useState(false);
+  const [expandedAccountId, setExpandedAccountId] = useState(null);
+  const [accountReposMap, setAccountReposMap] = useState({});
+
   useEffect(() => {
     loadState();
     fetchRuns().then(setRuns).catch(() => {});
+    fetchAccounts().then(setAccounts).catch(() => {});
   }, []);
 
   async function loadState() {
@@ -215,6 +244,50 @@ function App() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) { setError(e.message); }
+  }
+
+  async function handleAddAccount() {
+    if (!accountForm.name.trim()) return;
+    setAccountsBusy(true);
+    setError("");
+    try {
+      const result = await addAccount(accountForm.name.trim(), accountForm.platform, accountForm.profile, Number(accountForm.n_repos));
+      setAccounts((prev) => [result, ...prev]);
+      setAccountReposMap((prev) => ({ ...prev, [result.id]: result.repos }));
+      setExpandedAccountId(result.id);
+      setAccountForm((prev) => ({ ...prev, name: "" }));
+    } catch (e) { setError(e.message); }
+    finally { setAccountsBusy(false); }
+  }
+
+  async function handleDeleteAccount(id) {
+    try {
+      await deleteAccount(id);
+      setAccounts((prev) => prev.filter((a) => a.id !== id));
+      setAccountReposMap((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      if (expandedAccountId === id) setExpandedAccountId(null);
+    } catch (e) { setError(e.message); }
+  }
+
+  async function handleToggleRepos(id) {
+    if (expandedAccountId === id) { setExpandedAccountId(null); return; }
+    if (!accountReposMap[id]) {
+      try {
+        const repos = await fetchAccountRepos(id);
+        setAccountReposMap((prev) => ({ ...prev, [id]: repos }));
+      } catch (e) { setError(e.message); return; }
+    }
+    setExpandedAccountId(id);
+  }
+
+  async function handleApplyAll() {
+    setAccountsBusy(true);
+    setError("");
+    try {
+      const next = await applyAllAccounts();
+      startTransition(() => setState(next));
+    } catch (e) { setError(e.message); }
+    finally { setAccountsBusy(false); }
   }
 
   async function handleReview() {
@@ -319,6 +392,15 @@ function App() {
           <strong>{state.archive.length}</strong>
         </div>
         <div className="stats-bar-item">
+          <span>Train repos</span>
+          <strong>
+            {state.dataset?.train_size ?? "—"}
+            {state.dataset?.extra_train_size > 0 && (
+              <span className="dataset-extra"> (+{state.dataset.extra_train_size})</span>
+            )}
+          </strong>
+        </div>
+        <div className="stats-bar-item">
           <span>Best train</span>
           <strong>{formatPercent(state.best_agent.evaluation.fitness)}</strong>
         </div>
@@ -333,7 +415,7 @@ function App() {
       </div>
 
       {/* ── Tab navigation (sticky) ── */}
-      <TabNav active={activeTab} onChange={setActiveTab} archiveCount={archive.length} />
+      <TabNav active={activeTab} onChange={setActiveTab} archiveCount={archive.length} accountCount={accounts.length} />
 
       {/* ── Tab: Overview ── */}
       {activeTab === "overview" && (
@@ -366,6 +448,146 @@ function App() {
               <p className="summary-text">{state.best_agent.evaluation.summary}</p>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Tab: Accounts ── */}
+      {activeTab === "accounts" && (
+        <div className="tab-content">
+          <div className="panel-header">
+            <h3>Accounts</h3>
+            <p>Add GitHub accounts or synthetic orgs. Each account generates repos with feature scores that extend the agent's training dataset.</p>
+          </div>
+
+          {/* Add account form */}
+          <article className="detail-panel accounts-form">
+            <h4>Add Account</h4>
+            <div className="accounts-form-row">
+              <div className="accounts-form-field">
+                <label className="detail-label" htmlFor="acc-name">Account name</label>
+                <input
+                  id="acc-name"
+                  value={accountForm.name}
+                  onChange={(e) => setAccountForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="e.g. acme-corp or torvalds"
+                  onKeyDown={(e) => e.key === "Enter" && handleAddAccount()}
+                />
+              </div>
+              <fieldset className="mode-fieldset">
+                <legend className="detail-label">Platform</legend>
+                <label className="mode-option">
+                  <input type="radio" name="acc-platform" value="synthetic"
+                    checked={accountForm.platform === "synthetic"}
+                    onChange={() => setAccountForm((p) => ({ ...p, platform: "synthetic" }))} />
+                  Synthetic <span className="mode-hint">(instant, deterministic)</span>
+                </label>
+                <label className="mode-option">
+                  <input type="radio" name="acc-platform" value="github"
+                    checked={accountForm.platform === "github"}
+                    onChange={() => setAccountForm((p) => ({ ...p, platform: "github" }))} />
+                  GitHub <span className="mode-hint">(requires public API access)</span>
+                </label>
+              </fieldset>
+              {accountForm.platform === "synthetic" && (
+                <div className="accounts-form-field">
+                  <label className="detail-label" htmlFor="acc-profile">Quality profile</label>
+                  <select
+                    id="acc-profile"
+                    value={accountForm.profile}
+                    onChange={(e) => setAccountForm((p) => ({ ...p, profile: e.target.value }))}
+                  >
+                    {PROFILES.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="accounts-form-field">
+                <label className="detail-label" htmlFor="acc-nrepos">Repos to scan</label>
+                <input
+                  id="acc-nrepos"
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={accountForm.n_repos}
+                  onChange={(e) => setAccountForm((p) => ({ ...p, n_repos: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="hero-actions" style={{ marginTop: "0.85rem" }}>
+              <button type="button" onClick={handleAddAccount} disabled={accountsBusy || !accountForm.name.trim()}>
+                {accountsBusy ? "Scanning…" : "Add & Scan"}
+              </button>
+              {accounts.length > 0 && (
+                <button type="button" className="secondary" onClick={handleApplyAll} disabled={accountsBusy}>
+                  Apply All to Dataset
+                </button>
+              )}
+            </div>
+            {accounts.length > 0 && (
+              <p className="summary-text" style={{ marginTop: "0.5rem" }}>
+                "Apply All to Dataset" pushes all account repos into the engine (80% train / 20% test).
+                Then Reset to re-initialise the loop with the expanded dataset.
+              </p>
+            )}
+          </article>
+
+          {/* Account list */}
+          {accounts.length === 0 ? (
+            <p className="summary-text">No accounts added yet.</p>
+          ) : (
+            <div className="accounts-list">
+              {accounts.map((account) => (
+                <article key={account.id} className="account-card">
+                  <div className="account-card-header">
+                    <div className="account-card-meta">
+                      <strong>{account.name}</strong>
+                      <span className={`runs-mode ${account.platform}`}>{account.platform}</span>
+                      {account.profile && account.profile !== "inferred" && (
+                        <span className="muted">{account.profile}</span>
+                      )}
+                      <span className="muted">{account.repo_count} repos</span>
+                    </div>
+                    <div className="account-card-actions">
+                      <button type="button" className="runs-btn"
+                        onClick={() => handleToggleRepos(account.id)}>
+                        {expandedAccountId === account.id ? "Hide" : "View Repos"}
+                      </button>
+                      <button type="button" className="runs-btn danger"
+                        onClick={() => handleDeleteAccount(account.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+
+                  {expandedAccountId === account.id && accountReposMap[account.id] && (
+                    <div className="repos-table">
+                      <div className="repos-table-header">
+                        <span>Name</span>
+                        <span>Maint.</span>
+                        <span>Security</span>
+                        <span>Tests</span>
+                        <span>Docs</span>
+                        <span>Simplicity</span>
+                        <span>Label</span>
+                      </div>
+                      {accountReposMap[account.id].map((repo) => (
+                        <div key={repo.id ?? repo.name} className="repos-row">
+                          <span className="muted" title={repo.name}>{repo.name}</span>
+                          <FeatureBar value={repo.maintainability} />
+                          <FeatureBar value={repo.security} />
+                          <FeatureBar value={repo.test_coverage} />
+                          <FeatureBar value={repo.documentation} />
+                          <FeatureBar value={repo.simplicity} />
+                          <span className={repo.label === 1 ? "label-accept" : "label-reject"}>
+                            {repo.label === 1 ? "accept" : "reject"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

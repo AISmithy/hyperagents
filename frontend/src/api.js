@@ -62,3 +62,28 @@ export function loadRun(runId) {
 export function deleteRun(runId) {
   return request(`/runs/${runId}`, { method: "DELETE" });
 }
+
+// ── Account management ────────────────────────────────────────────────────────
+
+export function fetchAccounts() {
+  return request("/accounts");
+}
+
+export function addAccount(name, platform, profile, nRepos) {
+  return request("/accounts", {
+    method: "POST",
+    body: JSON.stringify({ name, platform, profile, n_repos: nRepos }),
+  });
+}
+
+export function fetchAccountRepos(accountId) {
+  return request(`/accounts/${accountId}/repos`);
+}
+
+export function deleteAccount(accountId) {
+  return request(`/accounts/${accountId}`, { method: "DELETE" });
+}
+
+export function applyAllAccounts() {
+  return request("/accounts/apply-all", { method: "POST" });
+}

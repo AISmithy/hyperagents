@@ -42,6 +42,27 @@ class GitHubService:
             "readme_excerpt": readme[:3000] if readme else "",
         }
 
+    def list_user_repos(self, username: str, max_repos: int = 20) -> list[dict]:
+        """Return public repos for a GitHub user or org (metadata only, no content fetch)."""
+        data = self._get(f"/users/{username}/repos?per_page={max_repos}&sort=updated&type=public")
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected response for user {username!r}: {type(data)}")
+        return [
+            {
+                "name": r.get("name", ""),
+                "html_url": r.get("html_url", ""),
+                "description": r.get("description") or "",
+                "stargazers_count": r.get("stargazers_count", 0),
+                "open_issues_count": r.get("open_issues_count", 0),
+                "archived": r.get("archived", False),
+                "has_wiki": r.get("has_wiki", False),
+                "has_pages": r.get("has_pages", False),
+                "topics": r.get("topics") or [],
+                "language": r.get("language") or "",
+            }
+            for r in data
+        ]
+
     def _parse_url(self, url: str) -> tuple[str, str]:
         parsed = urlparse(url.strip().rstrip("/"))
         parts = [p for p in parsed.path.split("/") if p]

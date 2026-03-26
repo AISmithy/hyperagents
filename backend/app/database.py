@@ -73,6 +73,27 @@ class EventRecord(SQLModel, table=True):
     summary: str
 
 
+class Account(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    platform: str        # "synthetic" | "github"
+    profile: str         # one of account_service.VALID_PROFILES, or "inferred" for github
+    created_at: str      # ISO-8601 UTC
+
+
+class AccountRepo(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True)
+    repo_ref: str        # original id from generator (e.g. "syn-acme-01")
+    name: str
+    maintainability: float
+    security: float
+    test_coverage: float
+    documentation: float
+    simplicity: float
+    label: int           # 0 or 1
+
+
 # ── Database class ────────────────────────────────────────────────────────────
 
 class Database:
@@ -195,6 +216,109 @@ class Database:
                 }
                 for r in runs
             ]
+
+    # ── account management ────────────────────────────────────────────────────
+
+    def create_account(self, name: str, platform: str, profile: str) -> int:
+        account = Account(
+            name=name,
+            platform=platform,
+            profile=profile,
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        with Session(self._engine) as session:
+            session.add(account)
+            session.commit()
+            session.refresh(account)
+            return account.id  # type: ignore[return-value]
+
+    def save_account_repo(self, account_id: int, repo: dict[str, Any]) -> int:
+        record = AccountRepo(
+            account_id=account_id,
+            repo_ref=repo.get("id", ""),
+            name=repo["name"],
+            maintainability=repo["maintainability"],
+            security=repo["security"],
+            test_coverage=repo["test_coverage"],
+            documentation=repo["documentation"],
+            simplicity=repo["simplicity"],
+            label=repo["label"],
+        )
+        with Session(self._engine) as session:
+            session.add(record)
+            session.commit()
+            session.refresh(record)
+            return record.id  # type: ignore[return-value]
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        with Session(self._engine) as session:
+            accounts = session.exec(select(Account).order_by(Account.id.desc())).all()
+            result = []
+            for a in accounts:
+                repo_count = len(session.exec(
+                    select(AccountRepo).where(AccountRepo.account_id == a.id)
+                ).all())
+                result.append({
+                    "id": a.id,
+                    "name": a.name,
+                    "platform": a.platform,
+                    "profile": a.profile,
+                    "created_at": a.created_at,
+                    "repo_count": repo_count,
+                })
+            return result
+
+    def get_account_repos(self, account_id: int) -> list[dict[str, Any]]:
+        with Session(self._engine) as session:
+            rows = session.exec(
+                select(AccountRepo).where(AccountRepo.account_id == account_id)
+            ).all()
+            return [
+                {
+                    "id": r.id,
+                    "account_id": r.account_id,
+                    "repo_ref": r.repo_ref,
+                    "name": r.name,
+                    "maintainability": r.maintainability,
+                    "security": r.security,
+                    "test_coverage": r.test_coverage,
+                    "documentation": r.documentation,
+                    "simplicity": r.simplicity,
+                    "label": r.label,
+                }
+                for r in rows
+            ]
+
+    def list_all_account_repos(self) -> list[dict[str, Any]]:
+        """Return all repos across all accounts (for bulk dataset apply)."""
+        with Session(self._engine) as session:
+            rows = session.exec(select(AccountRepo)).all()
+            return [
+                {
+                    "id": r.repo_ref,
+                    "name": r.name,
+                    "maintainability": r.maintainability,
+                    "security": r.security,
+                    "test_coverage": r.test_coverage,
+                    "documentation": r.documentation,
+                    "simplicity": r.simplicity,
+                    "label": r.label,
+                }
+                for r in rows
+            ]
+
+    def delete_account(self, account_id: int) -> bool:
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if not account:
+                return False
+            for repo in session.exec(
+                select(AccountRepo).where(AccountRepo.account_id == account_id)
+            ).all():
+                session.delete(repo)
+            session.delete(account)
+            session.commit()
+            return True
 
     def load_run(self, run_id: int) -> dict[str, Any] | None:
         with Session(self._engine) as session:
