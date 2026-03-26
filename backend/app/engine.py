@@ -77,7 +77,7 @@ class ArchiveEntry:
     created_iteration: int
 
 
-VALID_MODES = {"hyperagent", "baseline"}
+VALID_MODES = {"hyperagent", "baseline", "no_archive"}
 
 
 class HyperAgentEngine:
@@ -329,6 +329,11 @@ class HyperAgentEngine:
         return agent_id
 
     def _select_parent(self) -> ArchiveEntry:
+        # no_archive: greedy hill-climbing — always mutate from the single best.
+        # Removes the stepping-stones mechanism to isolate its contribution.
+        if self._mode == "no_archive":
+            return self.best_entry
+
         weights = []
         best_fitness = self.best_entry.evaluation.fitness
         for entry in self.archive:

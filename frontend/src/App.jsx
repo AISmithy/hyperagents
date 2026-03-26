@@ -285,6 +285,11 @@ function App() {
                   checked={mode === "baseline"} onChange={() => setMode("baseline")} />
                 Baseline <span className="mode-hint">(meta frozen)</span>
               </label>
+            <label className="mode-option">
+                <input type="radio" name="mode" value="no_archive"
+                  checked={mode === "no_archive"} onChange={() => setMode("no_archive")} />
+                No Archive <span className="mode-hint">(greedy, no stepping stones)</span>
+              </label>
             </fieldset>
           </div>
           <div className="hero-actions">

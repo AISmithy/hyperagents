@@ -36,7 +36,7 @@ class RunRequest(BaseModel):
 
 
 class ResetRequest(BaseModel):
-    mode: str = Field(default="hyperagent", pattern="^(hyperagent|baseline)$")
+    mode: str = Field(default="hyperagent", pattern="^(hyperagent|baseline|no_archive)$")
 
 
 class RepoReviewRequest(BaseModel):
