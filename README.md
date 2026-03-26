@@ -1,15 +1,13 @@
 # hyperagents
 
-`hyperagents` is a Python + React proof-of-concept inspired by the HyperAgents paper (`arXiv:2603.19461v1`).
+`hyperagents` is a Python + React research artifact inspired by the HyperAgents paper (`arXiv:2603.19461v1`).
 
-This implementation does not try to reproduce the full research stack. Instead, it captures the core idea in a form that is small, inspectable, and easy to extend:
+The core idea: an agent that improves not just its task behavior but also the policy that *produces* future improvements.
 
-- A `task agent` solves a domain task.
-- A `meta agent` modifies the task agent and itself.
-- A `hyperagent` bundles both into one editable artifact.
-- An `archive` stores past variants so promising lineages can keep improving.
-
-The first domain is a deterministic paper-review simulator. That keeps the framework easy to run locally while still showing the main research concept: the system improves both its task behavior and its own improvement policy over time.
+- A **task policy** solves a domain task (code-repository quality classification).
+- A **meta policy** controls how the task policy mutates each iteration.
+- A **hyperagent** bundles both into one editable record — so the mutation procedure is itself an evolvable artefact.
+- An **archive** stores every discovered variant, enabling stepping-stone exploration past local optima.
 
 ## Architecture
 
@@ -96,100 +94,95 @@ graph LR
 
 ## What Is Implemented
 
-- FastAPI backend for running hyperagent iterations
-- In-memory archive of agent variants
-- Parent selection from the archive
-- Self-modification of task policy and meta policy
-- Evaluation on train and test review examples
-- React dashboard to inspect archive state, progress, and the best agent
-- Optional OpenAI-backed mutation planning and live abstract review
+**Core loop**
+- Evolutionary hyperagent loop with weighted archive parent selection
+- Task policy self-modification: per-feature weights, decision threshold, review style
+- Meta policy self-modification: step sizes, focus metric, exploration scale, memory notes
+- Error-pressure mutation: false-positive and false-negative feature averages drive directional updates
+
+**Ablation conditions** (selectable from the UI or experiment runner)
+- `hyperagent` — full system (adaptive meta policy + archive)
+- `baseline` — frozen meta policy, archive enabled (isolates meta-policy contribution)
+- `no_archive` — adaptive meta policy, greedy parent selection (isolates archive contribution)
+
+**Experiment infrastructure**
+- Multi-seed runner (`scripts/run_experiment.py`): 3 conditions × 5 seeds × N iterations → `results/raw_metrics.csv`
+- Learning curve plots (`scripts/plot_results.py`): mean ± std across seeds, train + test panels, meta-policy drift
+- SQLite persistence: every run, agent variant, per-iteration metric, and mutation event is stored immediately
+
+**Dataset**
+- 20 training repositories (8 accepted, 12 rejected) — 10 clearly separated + 10 borderline
+- 10 held-out test repositories (4 accepted, 6 rejected) — 6 clearly separated + 4 borderline
+- Seed agent starts at ~65% train accuracy, leaving meaningful room for improvement
+
+**UI (React, tabbed)**
+- Overview: best agent stats, mode selector, run controls
+- Archive: sortable table of all variants with fitness and parent links
+- Agent Detail: weights, meta parameters, lineage notes, evaluation breakdown
+- Events: mutation log
+- Runs: saved experiment list with load / delete / CSV export
+- Live Review: manual repository scoring (optional OpenAI)
+
+---
 
 ## Project Structure
 
 ```text
-backend/
-  app/
-    datasets.py
-    engine.py
-    main.py
-    openai_service.py
-    settings.py
-  pyproject.toml
-frontend/
-  src/
-    api.js
-    App.jsx
-    main.jsx
-    styles.css
-  index.html
-  package.json
-  vite.config.js
-docs/
-  architecture.md
+hyperagents/
+├── backend/
+│   ├── app/
+│   │   ├── datasets.py          # 20 train + 10 test repo fixtures
+│   │   ├── database.py          # SQLModel tables + Database class
+│   │   ├── engine.py            # HyperAgentEngine — core evolutionary loop
+│   │   ├── main.py              # FastAPI app + route handlers
+│   │   ├── openai_service.py    # Optional LLM mutation planner
+│   │   ├── settings.py          # Env-driven config
+│   │   └── prompts/             # Prompt templates for OpenAI calls
+│   └── pyproject.toml
+├── frontend/
+│   └── src/
+│       ├── App.jsx              # Tabbed dashboard
+│       ├── api.js               # Fetch wrappers
+│       └── styles.css
+├── scripts/
+│   ├── run_experiment.py        # Multi-seed ablation runner
+│   └── plot_results.py          # Matplotlib learning curves + meta drift
+├── docs/
+│   ├── architecture.md          # Full architecture reference
+│   └── methods.md               # Methods section draft (arXiv paper)
+├── results/
+│   ├── raw_metrics.csv          # Pre-generated: 3 conditions × 5 seeds × 30 iter
+│   ├── learning_curves.png      # Train + test accuracy panels
+│   └── meta_policy_drift.png    # Weight step / threshold step / exploration scale
+├── run.ps1                      # One-command local start (Windows)
+└── stop.ps1                     # One-command local stop
 ```
 
-## Step By Step
+---
 
-### 0. One-command local run
+## Quick Start
 
-If you want the backend and frontend started together:
+### Option A — one command (Windows)
 
 ```powershell
 ./run.ps1
 ```
 
-To stop both services later:
+Starts backend and frontend together. To stop:
 
 ```powershell
 ./stop.ps1
 ```
 
 Default URLs:
-
 - Frontend: `http://127.0.0.1:4173`
-- Backend: `http://127.0.0.1:8011/api`
+- Backend API: `http://127.0.0.1:8011/api`
 
-The script will:
+The script finds Python 3.11+ and Node.js, installs missing dependencies, loads `.env.local` if present, and saves logs and PIDs under `.run/`.
 
-- find Python 3.11+ and Node.js
-- install missing backend/frontend dependencies
-- load `.env.local` if present
-- write `frontend/.env.local` with the backend API URL
-- start both services
-- save logs and PID files under `.run/`
+### Option B — manual
 
-### 1. OpenAI integration
-
-Do not paste API keys into chat, code, or git history. If a key has already been pasted, revoke it and create a new one.
-
-Create `.env.local` at the repo root from `.env.example` and set:
-
-```powershell
-OPENAI_API_KEY=your_new_key
-OPENAI_MODEL=gpt-5-mini
-HYPERAGENTS_USE_OPENAI=1
-```
-
-Then run:
-
-```powershell
-./run.ps1
-```
-
-When enabled, the backend uses the OpenAI Responses API for:
-
-- mutation planning inside the hyperagent loop
-- live abstract review from the UI
-
-Without those variables, the app falls back to the deterministic local simulator.
-
-### 2. Backend setup
-
-Requirements:
-
-- Python 3.11+
-
-Commands:
+**Backend** (Python 3.11+):
 
 ```powershell
 cd backend
@@ -199,15 +192,7 @@ pip install -e .
 uvicorn app.main:app --reload --port 8011
 ```
 
-If your machine uses `python` instead of `py`, replace the launcher accordingly.
-
-### 3. Frontend setup
-
-Requirements:
-
-- Node.js 20+
-
-Commands:
+**Frontend** (Node.js 20+):
 
 ```powershell
 cd frontend
@@ -216,48 +201,59 @@ $env:VITE_API_BASE="http://127.0.0.1:8011/api"
 npm run dev -- --port 4173
 ```
 
-### 4. Run the proof-of-concept
+---
 
-1. Open the frontend.
-2. Click `Run Iterations`.
-3. Inspect how new child agents change:
-   - task weights
-   - decision threshold
-   - review persona
-   - meta focus metric
-   - exploration strength
-   - memory notes
-4. If OpenAI mode is enabled, use `Live Review` to score a draft title and abstract.
+## Running the Ablation Experiment
 
-### 5. Next extension points
+Generate the CSV and plots used in the paper:
 
-- Replace the deterministic task agent with a real benchmark-backed task runner
-- Replace JSON-only mutation planning with tool-using agent loops
-- Add multiple domains and cross-domain transfer runs
-- Scale to larger archives with MAP-Elites or quality-diversity selection
+```powershell
+# from repo root, with backend venv active
+python scripts/run_experiment.py --iterations 30 --seeds 5
+python scripts/plot_results.py
+```
+
+Outputs:
+- `results/raw_metrics.csv` — per-iteration scores for all conditions and seeds
+- `results/learning_curves.png` — train + test accuracy learning curves
+- `results/meta_policy_drift.png` — meta-policy parameter trajectories
+
+Key result: the **No Archive** condition plateaus at 80% train accuracy while both archive conditions reach 85%, demonstrating the stepping-stones contribution of the archive.
+
+---
+
+## OpenAI Integration (optional)
+
+Copy `.env.example` to `.env.local` and set:
+
+```powershell
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=gpt-4o-mini
+HYPERAGENTS_USE_OPENAI=1
+```
+
+When enabled, the backend uses the OpenAI API for mutation planning and the Live Review tab. Without those variables the system runs fully offline using the deterministic heuristic engine.
+
+> Do not paste API keys into chat, code, or git history. If a key has been exposed, revoke it immediately.
+
+---
 
 ## Why This Matches The Paper
 
-The paper’s key mechanism is not just recursive optimization. It is metacognitive self-modification: the procedure that creates future improvements is itself editable. In this project:
+The paper's key mechanism is not just recursive optimization — it is **metacognitive self-modification**: the procedure that creates future improvements is itself editable. In this implementation:
 
-- `task_policy` controls how an agent reviews papers
+- `task_policy` controls how a repository is scored and classified
 - `meta_policy` controls how future mutations are proposed
-- both live inside the same agent record
-- both can be changed by the system during the run
+- both live inside the same mutable agent record
+- both can be modified by the system during a run
 
-That is the smallest practical version of the hyperagent idea.
+That is the minimal practical instantiation of the hyperagent idea.
 
-## Current Limitations
+---
 
-- The default domain is still a simulated task environment
-- OpenAI usage is optional and disabled by default
-- The UI is intended for local experimentation, not production deployment
-- ChatGPT app subscriptions and API billing are separate products; you need API access configured in the OpenAI platform account
+## Extending the Project
 
-## Recommended Next Step
-
-Start the backend and frontend, verify the loop works locally, then choose one of these directions:
-
-1. Make both the task agent and meta agent fully model-driven
-2. Add a real evaluation benchmark instead of the current simulator
-3. Add persistence and experiment tracking for repeated runs
+- Replace the heuristic mutation operator with an LLM-driven one (prompts are already templated in `backend/app/prompts/`)
+- Swap the synthetic dataset for a real code-quality benchmark
+- Add MAP-Elites or quality-diversity selection for broader archive coverage
+- Port to a multi-domain setting to study cross-domain transfer of meta policies
