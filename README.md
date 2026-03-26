@@ -11,6 +11,89 @@ This implementation does not try to reproduce the full research stack. Instead, 
 
 The first domain is a deterministic paper-review simulator. That keeps the framework easy to run locally while still showing the main research concept: the system improves both its task behavior and its own improvement policy over time.
 
+## Architecture
+
+### System Components
+
+```mermaid
+graph TB
+  subgraph FE ["Frontend  (React + Vite · :4173)"]
+    UI["Dashboard\nOverview · Archive · Agent Detail · Events · Runs · Live Review"]
+  end
+
+  subgraph BE ["Backend  (FastAPI · :8011)"]
+    API["REST API\n/api/reset · /api/run · /api/archive\n/api/metrics · /api/runs"]
+    ENGINE["HyperAgentEngine"]
+    OAI["OpenAI Service\n(optional)"]
+  end
+
+  subgraph CORE ["Core Engine"]
+    HA["HyperAgent\ntask_policy + meta_policy"]
+    ARCHIVE["Archive\nall variants + lineage"]
+    DS["Dataset\n20 train · 10 test repos"]
+  end
+
+  subgraph PERSIST ["Persistence"]
+    DB[("SQLite\nhyperagents.db")]
+    CSV["results/raw_metrics.csv"]
+  end
+
+  SCRIPTS["scripts/\nrun_experiment.py · plot_results.py"]
+
+  UI        <-->|"HTTP / JSON"| API
+  API       --> ENGINE
+  ENGINE    --> HA
+  ENGINE    --> ARCHIVE
+  ENGINE    --> DS
+  ENGINE    -.->|"optional"| OAI
+  ENGINE    -->|"persist"| DB
+  SCRIPTS   -->|"direct import"| ENGINE
+  SCRIPTS   --> CSV
+```
+
+### Evolutionary Loop
+
+```mermaid
+flowchart TD
+  SEED["Seed HyperAgent\nweights · threshold · style\nfocus · steps · exploration"]
+  SEED --> ARC
+
+  ARC["Archive\nall variants + scores + parent links"]
+  ARC -->|"weighted selection\nfitness × exploration × novelty"| PARENT["Parent Agent"]
+  PARENT -->|"meta_policy drives"| MUT
+
+  MUT["Mutation\n① error-pressure weight update\n② stochastic noise\n③ threshold adjustment\n④ meta-param update"]
+  MUT --> CHILD["Child HyperAgent"]
+  CHILD --> EVAL
+
+  EVAL["Evaluation\ntrain accuracy  ·  test accuracy\nFP count  ·  FN count"]
+  EVAL -->|"improved → shrink exploration\nno change → grow exploration"| ADJUST["Meta Adjustment"]
+  ADJUST --> ARC
+  EVAL -->|"record"| LOG["Progress Log  →  SQLite + CSV"]
+```
+
+### Ablation Conditions
+
+```mermaid
+graph LR
+  subgraph HA ["HyperAgent  (full system)"]
+    direction TB
+    HA1["Weighted archive\nparent selection"] --> HA2["Adaptive meta policy"]
+  end
+  subgraph BL ["Baseline  (frozen meta)"]
+    direction TB
+    BL1["Weighted archive\nparent selection"] --> BL2["Fixed meta policy"]
+  end
+  subgraph NA ["No Archive  (greedy)"]
+    direction TB
+    NA1["Always current\nbest agent"] --> NA2["Adaptive meta policy"]
+  end
+```
+
+> Full diagrams, database schema, API reference, and directory layout: [`docs/architecture.md`](docs/architecture.md).
+
+---
+
 ## What Is Implemented
 
 - FastAPI backend for running hyperagent iterations
@@ -150,9 +233,8 @@ npm run dev -- --port 4173
 
 - Replace the deterministic task agent with a real benchmark-backed task runner
 - Replace JSON-only mutation planning with tool-using agent loops
-- Persist runs to SQLite or Postgres
 - Add multiple domains and cross-domain transfer runs
-- Add baseline modes such as `no self-improvement` and `no archive`
+- Scale to larger archives with MAP-Elites or quality-diversity selection
 
 ## Why This Matches The Paper
 
@@ -169,7 +251,6 @@ That is the smallest practical version of the hyperagent idea.
 
 - The default domain is still a simulated task environment
 - OpenAI usage is optional and disabled by default
-- State is stored in memory only
 - The UI is intended for local experimentation, not production deployment
 - ChatGPT app subscriptions and API billing are separate products; you need API access configured in the OpenAI platform account
 
