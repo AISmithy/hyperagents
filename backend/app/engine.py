@@ -76,6 +76,9 @@ class ArchiveEntry:
     created_iteration: int
 
 
+VALID_MODES = {"hyperagent", "baseline"}
+
+
 class HyperAgentEngine:
     def __init__(self, llm_service: OpenAIHyperAgentService | None = None, seed: int = 7) -> None:
         self._llm_service = llm_service
@@ -87,23 +90,33 @@ class HyperAgentEngine:
         self._train_negative_avgs = average_feature_map(
             [repo for repo in TRAIN_REPOS if repo["label"] == 0]
         )
+        self._mode = "hyperagent"
+        self._freeze_meta = False
+        self._seed_meta_policy: MetaPolicy | None = None
+        self._last_mutation_was_llm = False
         self.reset()
 
-    def reset(self) -> None:
+    def reset(self, mode: str = "hyperagent") -> None:
+        if mode not in VALID_MODES:
+            raise ValueError(f"mode must be one of {VALID_MODES}")
+        self._mode = mode
+        self._freeze_meta = mode == "baseline"
         self._rng = random.Random(self._seed)
         self._next_id = 0
+        self._last_mutation_was_llm = False
         self.iterations_completed = 0
         self.archive: list[ArchiveEntry] = []
         self.progress: list[dict[str, Any]] = []
         self.recent_events: list[dict[str, Any]] = []
         initial_agent = self._build_initial_agent()
+        self._seed_meta_policy = deepcopy(initial_agent.meta_policy)
         initial_entry = ArchiveEntry(
             agent=initial_agent,
             evaluation=self._evaluate_agent(initial_agent),
             created_iteration=0,
         )
         self.archive.append(initial_entry)
-        self._record_progress()
+        self._record_progress(initial_entry)
 
     def run(self, iterations: int) -> None:
         for _ in range(iterations):
@@ -129,7 +142,7 @@ class HyperAgentEngine:
                 }
             )
             self.recent_events = self.recent_events[-12:]
-            self._record_progress()
+            self._record_progress(entry)
 
     def snapshot(self) -> dict[str, Any]:
         best = self.best_entry
@@ -140,6 +153,7 @@ class HyperAgentEngine:
                 "A HyperAgents-inspired proof-of-concept where each agent "
                 "contains task behavior and self-modification behavior."
             ),
+            "mode": self._mode,
             "iterations_completed": self.iterations_completed,
             "provider": self._provider_snapshot(),
             "dataset": {
@@ -151,6 +165,20 @@ class HyperAgentEngine:
             "progress": self.progress,
             "recent_events": list(reversed(self.recent_events)),
         }
+
+    def metrics_json(self) -> list[dict[str, Any]]:
+        """Full per-iteration log suitable for analysis or export."""
+        return [dict(row, mode=self._mode) for row in self.progress]
+
+    def metrics_csv(self) -> str:
+        rows = self.metrics_json()
+        if not rows:
+            return ""
+        columns = list(rows[0].keys())
+        lines = [",".join(columns)]
+        for row in rows:
+            lines.append(",".join(str(row.get(col, "")) for col in columns))
+        return "\n".join(lines)
 
     @property
     def best_entry(self) -> ArchiveEntry:
@@ -216,12 +244,16 @@ class HyperAgentEngine:
         return self._rng.choices(self.archive, weights=weights, k=1)[0]
 
     def _mutate(self, parent: ArchiveEntry) -> HyperAgent:
-        llm_child = self._llm_mutation(parent)
-        if llm_child is not None:
-            return llm_child
+        self._last_mutation_was_llm = False
+        if not self._freeze_meta:
+            llm_child = self._llm_mutation(parent)
+            if llm_child is not None:
+                self._last_mutation_was_llm = True
+                return llm_child
 
         child_task = deepcopy(parent.agent.task_policy)
-        child_meta = deepcopy(parent.agent.meta_policy)
+        # Baseline mode: always use seed meta policy so the improver never improves.
+        child_meta = deepcopy(self._seed_meta_policy if self._freeze_meta else parent.agent.meta_policy)
         fp_count = parent.evaluation.false_positive_count
         fn_count = parent.evaluation.false_negative_count
         fp_avgs = parent.evaluation.false_positive_feature_avgs
@@ -273,25 +305,28 @@ class HyperAgentEngine:
         else:
             child_task.review_style = "balanced"
 
-        if pressure_by_feature[focus_metric] < 0.08:
-            child_meta.weight_step = round(clamp(child_meta.weight_step + 0.015, 0.04, 0.22), 3)
-            child_meta.exploration_scale = round(
-                clamp(child_meta.exploration_scale + 0.03, 0.05, 0.45),
-                3,
-            )
-        else:
-            child_meta.weight_step = round(clamp(child_meta.weight_step - 0.005, 0.04, 0.22), 3)
+        # Only update meta-policy parameters in hyperagent mode.
+        # In baseline mode child_meta is already a frozen clone of the seed.
+        if not self._freeze_meta:
+            if pressure_by_feature[focus_metric] < 0.08:
+                child_meta.weight_step = round(clamp(child_meta.weight_step + 0.015, 0.04, 0.22), 3)
+                child_meta.exploration_scale = round(
+                    clamp(child_meta.exploration_scale + 0.03, 0.05, 0.45),
+                    3,
+                )
+            else:
+                child_meta.weight_step = round(clamp(child_meta.weight_step - 0.005, 0.04, 0.22), 3)
 
-        if fp_count != fn_count:
-            child_meta.threshold_step = round(
-                clamp(child_meta.threshold_step + 0.005, 0.03, 0.14),
-                3,
-            )
-        else:
-            child_meta.threshold_step = round(
-                clamp(child_meta.threshold_step - 0.005, 0.03, 0.14),
-                3,
-            )
+            if fp_count != fn_count:
+                child_meta.threshold_step = round(
+                    clamp(child_meta.threshold_step + 0.005, 0.03, 0.14),
+                    3,
+                )
+            else:
+                child_meta.threshold_step = round(
+                    clamp(child_meta.threshold_step - 0.005, 0.03, 0.14),
+                    3,
+                )
 
         note = self._build_memory_note(parent, focus_metric)
         child_meta.memory = (child_meta.memory + [note])[-4:]
@@ -371,6 +406,8 @@ class HyperAgentEngine:
         )
 
     def _post_evaluation_meta_adjustment(self, child: HyperAgent, delta: float) -> None:
+        if self._freeze_meta:
+            return
         if delta > 0:
             child.meta_policy.exploration_scale = round(
                 clamp(child.meta_policy.exploration_scale - 0.02, 0.05, 0.45),
@@ -469,14 +506,28 @@ class HyperAgentEngine:
         rng = random.Random(seed)
         return (rng.random() * 2.0) - 1.0
 
-    def _record_progress(self) -> None:
+    def _record_progress(self, current_entry: ArchiveEntry) -> None:
         best = self.best_entry
+        mutation_source = (
+            "seed" if self.iterations_completed == 0
+            else ("llm" if self._last_mutation_was_llm else "heuristic")
+        )
         self.progress.append(
             {
                 "iteration": self.iterations_completed,
+                # Best-so-far (monotonically non-decreasing)
                 "best_fitness": best.evaluation.fitness,
                 "best_test_accuracy": best.evaluation.test_accuracy,
+                # Per-iteration child scores (shows raw improvement signal)
+                "child_train_accuracy": current_entry.evaluation.train_accuracy,
+                "child_test_accuracy": current_entry.evaluation.test_accuracy,
                 "archive_size": len(self.archive),
+                # Meta-policy state at this iteration (shows whether the improver is itself improving)
+                "meta_focus_metric": current_entry.agent.meta_policy.focus_metric,
+                "meta_weight_step": current_entry.agent.meta_policy.weight_step,
+                "meta_threshold_step": current_entry.agent.meta_policy.threshold_step,
+                "meta_exploration_scale": current_entry.agent.meta_policy.exploration_scale,
+                "mutation_source": mutation_source,
             }
         )
 

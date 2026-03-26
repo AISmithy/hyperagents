@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useState } from "react";
-import { fetchState, resetState, reviewRepository, runIterations } from "./api";
+import { fetchMetricsCsv, fetchState, resetState, reviewRepository, runIterations } from "./api";
 
 function formatPercent(value) {
   return `${Math.round(value * 100)}%`;
@@ -124,6 +124,7 @@ function App() {
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [mode, setMode] = useState("hyperagent");
   const [repoUrl, setRepoUrl] = useState("");
   const [reviewResult, setReviewResult] = useState(null);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -168,7 +169,7 @@ function App() {
     setIsBusy(true);
     setError("");
     try {
-      const nextState = await resetState();
+      const nextState = await resetState(mode);
       startTransition(() => {
         setState(nextState);
         setSelectedAgentId(nextState.best_agent.agent.agent_id);
@@ -178,6 +179,21 @@ function App() {
       setError(resetError.message);
     } finally {
       setIsBusy(false);
+    }
+  }
+
+  async function handleExportCsv() {
+    try {
+      const csv = await fetchMetricsCsv();
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `hyperagents-metrics-${state?.mode ?? "run"}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(exportError.message);
     }
   }
 
@@ -236,14 +252,45 @@ function App() {
             value={iterations}
             onChange={(event) => setIterations(event.target.value)}
           />
+          <fieldset className="mode-fieldset">
+            <legend className="detail-label">Mode</legend>
+            <label className="mode-option">
+              <input
+                type="radio"
+                name="mode"
+                value="hyperagent"
+                checked={mode === "hyperagent"}
+                onChange={() => setMode("hyperagent")}
+              />
+              HyperAgent <span className="mode-hint">(meta policy self-improves)</span>
+            </label>
+            <label className="mode-option">
+              <input
+                type="radio"
+                name="mode"
+                value="baseline"
+                checked={mode === "baseline"}
+                onChange={() => setMode("baseline")}
+              />
+              Baseline <span className="mode-hint">(meta policy frozen at seed)</span>
+            </label>
+          </fieldset>
           <div className="hero-actions">
             <button type="button" onClick={handleRun} disabled={isBusy}>
               {isBusy ? "Running..." : "Run Iterations"}
             </button>
             <button type="button" className="secondary" onClick={handleReset} disabled={isBusy}>
-              Reset
+              Reset ({mode})
+            </button>
+            <button type="button" className="secondary" onClick={handleExportCsv} disabled={isBusy}>
+              Export CSV
             </button>
           </div>
+          {state.mode ? (
+            <p className="detail-label">
+              Active mode: <strong>{state.mode}</strong>
+            </p>
+          ) : null}
           {error ? <p className="error-text">{error}</p> : null}
         </div>
       </section>

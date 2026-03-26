@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .engine import HyperAgentEngine
@@ -32,6 +33,10 @@ class RunRequest(BaseModel):
     iterations: int = Field(default=5, ge=1, le=100)
 
 
+class ResetRequest(BaseModel):
+    mode: str = Field(default="hyperagent", pattern="^(hyperagent|baseline)$")
+
+
 class RepoReviewRequest(BaseModel):
     repo_url: str = Field(min_length=10, max_length=500)
 
@@ -55,9 +60,19 @@ def get_state() -> dict:
 
 
 @app.post("/api/reset")
-def reset() -> dict:
-    engine.reset()
+def reset(request: ResetRequest = ResetRequest()) -> dict:
+    engine.reset(mode=request.mode)
     return engine.snapshot()
+
+
+@app.get("/api/metrics/json")
+def metrics_json() -> list:
+    return engine.metrics_json()
+
+
+@app.get("/api/metrics/csv", response_class=PlainTextResponse)
+def metrics_csv() -> str:
+    return engine.metrics_csv()
 
 
 @app.post("/api/run")

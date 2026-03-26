@@ -22,8 +22,19 @@ export function fetchState() {
   return request("/state");
 }
 
-export function resetState() {
-  return request("/reset", { method: "POST" });
+export function resetState(mode = "hyperagent") {
+  return request("/reset", {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+}
+
+export function fetchMetricsCsv() {
+  const base = import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api";
+  return fetch(`${base}/metrics/csv`).then((r) => {
+    if (!r.ok) throw new Error(`Export failed with status ${r.status}`);
+    return r.text();
+  });
 }
 
 export function runIterations(iterations) {
