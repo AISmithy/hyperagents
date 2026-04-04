@@ -19,7 +19,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 class Run(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     run_uuid: str = Field(index=True)
-    mode: str                        # "hyperagent" | "baseline"
+    mode: str                        # "hyperagent" | "baseline" | "no_archive"
     seed: int
     created_at: str                  # ISO-8601 UTC
     iterations_completed: int = 0
@@ -305,6 +305,46 @@ class Database:
                     "label": r.label,
                 }
                 for r in rows
+            ]
+
+    def get_all_progress(self) -> list[dict[str, Any]]:
+        """Return every progress row joined with its run's condition (mode).
+
+        The ``condition`` column uses the internal mode name
+        ("hyperagent" | "baseline" | "no_archive").  Callers that need the
+        paper-facing label ("full" | "frozen_meta" | "no_archive") can map
+        via ``engine.CONDITION_LABELS``.  Suitable for direct DataFrame
+        construction for analysis and plotting.
+        """
+        from app.engine import CONDITION_LABELS  # local import avoids circular dep
+
+        with Session(self._engine) as session:
+            runs = {r.id: r for r in session.exec(select(Run)).all()}
+            progress_rows = session.exec(
+                select(ProgressRecord).order_by(ProgressRecord.run_id, ProgressRecord.iteration)
+            ).all()
+            return [
+                {
+                    "run_id": p.run_id,
+                    "run_uuid": runs[p.run_id].run_uuid if p.run_id in runs else None,
+                    "condition": runs[p.run_id].mode if p.run_id in runs else None,
+                    "condition_label": CONDITION_LABELS.get(
+                        runs[p.run_id].mode if p.run_id in runs else "", ""
+                    ),
+                    "seed": runs[p.run_id].seed if p.run_id in runs else None,
+                    "iteration": p.iteration,
+                    "best_fitness": p.best_fitness,
+                    "best_test_accuracy": p.best_test_accuracy,
+                    "child_train_accuracy": p.child_train_accuracy,
+                    "child_test_accuracy": p.child_test_accuracy,
+                    "archive_size": p.archive_size,
+                    "meta_focus_metric": p.meta_focus_metric,
+                    "meta_weight_step": p.meta_weight_step,
+                    "meta_threshold_step": p.meta_threshold_step,
+                    "meta_exploration_scale": p.meta_exploration_scale,
+                    "mutation_source": p.mutation_source,
+                }
+                for p in progress_rows
             ]
 
     def delete_account(self, account_id: int) -> bool:

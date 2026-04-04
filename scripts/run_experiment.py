@@ -22,17 +22,11 @@ from pathlib import Path
 # Make the backend importable without a venv activation step
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app.engine import HyperAgentEngine  # noqa: E402
+from app.engine import CONDITION_LABELS, HyperAgentEngine  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-CONDITIONS = ["hyperagent", "baseline", "no_archive"]
-
-CONDITION_LABELS = {
-    "hyperagent": "HyperAgent (full system)",
-    "baseline":   "Baseline (frozen meta)",
-    "no_archive": "No Archive (greedy)",
-}
+CONDITIONS = list(CONDITION_LABELS.keys())  # ["hyperagent", "baseline", "no_archive"]
 
 OUTPUT_PATH = Path(__file__).resolve().parents[1] / "results" / "raw_metrics.csv"
 

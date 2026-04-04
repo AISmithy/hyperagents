@@ -17,6 +17,14 @@ if TYPE_CHECKING:
 LOG_PATH = pathlib.Path("results/runs.csv")
 
 FEATURES = ("maintainability", "security", "test_coverage", "documentation", "simplicity")
+
+# Paper-facing labels for each experimental condition.
+# Used by run_experiment.py and database analysis queries.
+CONDITION_LABELS: dict[str, str] = {
+    "hyperagent": "full",
+    "baseline":   "frozen_meta",
+    "no_archive": "no_archive",
+}
 STYLE_THRESHOLD_OFFSET = {
     "balanced": 0.0,
     "strict": 0.09,
