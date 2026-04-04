@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import datetime
+import pathlib
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import random
@@ -11,12 +14,33 @@ if TYPE_CHECKING:
     from .database import Database
     from .openai_service import OpenAIHyperAgentService
 
+LOG_PATH = pathlib.Path("results/runs.csv")
+
 FEATURES = ("maintainability", "security", "test_coverage", "documentation", "simplicity")
 STYLE_THRESHOLD_OFFSET = {
     "balanced": 0.0,
     "strict": 0.09,
     "lenient": -0.09,
 }
+
+
+def log_result(
+    run_id: int | None,
+    iteration: int,
+    agent_id: str,
+    train_score: float,
+    test_score: float,
+    meta_policy: "MetaPolicy",
+    condition: str,
+) -> None:
+    LOG_PATH.parent.mkdir(exist_ok=True)
+    with open(LOG_PATH, "a", newline="") as f:
+        csv.writer(f).writerow([
+            datetime.datetime.utcnow().isoformat(),
+            run_id, iteration, agent_id,
+            train_score, test_score,
+            str(asdict(meta_policy)), condition,
+        ])
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -123,6 +147,12 @@ class HyperAgentEngine:
         )
         self.archive.append(initial_entry)
         self._record_progress(initial_entry)
+        log_result(
+            self._run_id, 0, initial_agent.agent_id,
+            initial_entry.evaluation.train_accuracy,
+            initial_entry.evaluation.test_accuracy,
+            initial_agent.meta_policy, self._mode,
+        )
 
         if self._db is not None:
             self._run_id = self._db.create_run(self._mode, self._seed)
@@ -143,6 +173,11 @@ class HyperAgentEngine:
             )
             self.archive.append(entry)
             self.iterations_completed += 1
+            log_result(
+                self._run_id, self.iterations_completed, child.agent_id,
+                child_eval.train_accuracy, child_eval.test_accuracy,
+                child.meta_policy, self._mode,
+            )
             self.recent_events.append(
                 {
                     "iteration": self.iterations_completed,
