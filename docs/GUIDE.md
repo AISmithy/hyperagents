@@ -119,12 +119,16 @@ hyperagents/
 │
 ├── backend/               ← Python server (the brain)
 │   └── app/
-│       ├── engine.py      ← The evolutionary loop lives here
-│       ├── datasets.py    ← The 30 fake repos used for training/testing
-│       ├── database.py    ← Saves everything to SQLite
-│       ├── main.py        ← Web API (connects UI to engine)
-│       ├── settings.py    ← Configuration (ports, API keys)
-│       └── openai_service.py  ← Optional: use GPT to guide mutations
+│       ├── engine.py          ← Research engine: evolves numerical weights
+│       ├── prompt_engine.py   ← Prompt engine: evolves your code-reviewer.md
+│       ├── datasets.py        ← The 30 fake repos used for training/testing
+│       ├── database.py        ← Saves everything to SQLite
+│       ├── main.py            ← Web API (connects UI to both engines)
+│       ├── settings.py        ← Configuration (ports, API keys)
+│       ├── openai_service.py  ← Optional: use GPT to guide mutations
+│       └── prompts/
+│           ├── propose_mutation.md       ← LLM prompt for weight mutation
+│           └── mutate_reviewer_prompt.md ← LLM prompt for prompt mutation
 │
 ├── frontend/              ← React web dashboard (what you see in browser)
 │   └── src/
@@ -137,6 +141,8 @@ hyperagents/
 │
 ├── docs/                  ← Documentation
 ├── results/               ← CSV files and graphs are saved here
+│   ├── runs.csv           ← Per-iteration log from the research engine
+│   └── prompt_runs.csv    ← Per-review log from the prompt engine
 └── hyperagents.db         ← SQLite database (auto-created on first run)
 ```
 
@@ -333,6 +339,136 @@ HYPERAGENTS_USE_OPENAI=1
 
 ---
 
+## Self-Improving Code Reviewer (Prompt Engine)
+
+This is a second, separate engine built on the same HyperAgent principles — but instead of evolving numerical weights, it evolves the **text of a code reviewer prompt** (like a `code-reviewer.md` file).
+
+### The idea
+
+Every time you use a code reviewer agent on your codebase, you can rate how useful the review was. The engine uses that rating to automatically improve the prompt for next time.
+
+### How it works
+
+```
+Step 1 — Load your existing code-reviewer.md as the starting prompt.
+
+Step 2 — Run a review of your codebase using that prompt.
+
+Step 3 — Read the review. Note what it got right and what it missed.
+
+Step 4 — Submit your rating (1–5) and your notes to the engine.
+
+Step 5 — The engine mutates the prompt:
+           - With OpenAI: GPT rewrites the prompt, fixing the gaps
+           - Without OpenAI: targeted instructions are appended based on your gaps
+
+Step 6 — The improved prompt becomes the active one for next time.
+
+Step 7 — Repeat after your next review cycle.
+```
+
+Every version of the prompt is kept in an **archive** — the same stepping-stones mechanism as the research engine. If a new version turns out worse, the system can build from an earlier good version.
+
+---
+
+### Using the Prompt Engine via API
+
+All prompt engine endpoints are under `/api/promptagent/`.
+
+**1. Load your agent**
+
+Pass the contents of your `code-reviewer.md`:
+
+```bash
+curl -X POST http://localhost:8000/api/promptagent/reset \
+  -H "Content-Type: application/json" \
+  -d "{\"seed_prompt\": \"$(cat code-reviewer.md)\"}"
+```
+
+Or call it with an empty body to use the built-in default prompt:
+
+```bash
+curl -X POST http://localhost:8000/api/promptagent/reset \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+---
+
+**2. Check the active prompt**
+
+```bash
+curl http://localhost:8000/api/promptagent/state
+```
+
+Returns the current prompt, full archive of past versions, and review history.
+
+---
+
+**3. Submit a review result**
+
+After running a review, tell the engine how it went:
+
+```bash
+curl -X POST http://localhost:8000/api/promptagent/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "review_text": "...the actual review output...",
+    "rating": 3,
+    "strengths": ["caught SQL injection in login.py"],
+    "gaps": ["missed missing tests in auth module", "no error handling coverage"],
+    "codebase_ref": "my-repo @ main"
+  }'
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `review_text` | Yes | The full output of the review (or a summary) |
+| `rating` | Yes | 1 (poor) to 5 (excellent) |
+| `strengths` | No | List of things the review got right |
+| `gaps` | No | List of things it missed — this drives the mutation |
+| `codebase_ref` | No | A label for the codebase reviewed (e.g. `my-repo @ main`) |
+
+The response contains `new_prompt` — the evolved version ready for the next review.
+
+---
+
+**4. Export the best prompt back to your file**
+
+```bash
+curl http://localhost:8000/api/promptagent/export | python -c "import sys,json; print(json.load(sys.stdin)['prompt'])" > code-reviewer.md
+```
+
+This writes the highest-rated prompt version found so far back to your file.
+
+---
+
+### Rating guide
+
+| Rating | Meaning |
+|---|---|
+| 1 | The review missed most issues or was too vague to be useful |
+| 2 | Some useful findings but significant gaps |
+| 3 | Decent review, a few important things missed |
+| 4 | Good review, minor gaps only |
+| 5 | Excellent — caught everything important, clear and actionable |
+
+The gaps you list at rating 3 or below are the most important input — they directly tell the engine what to fix in the next prompt version.
+
+---
+
+### With vs without OpenAI
+
+| | Without OpenAI | With OpenAI |
+|---|---|---|
+| **How mutation works** | Appends gap-targeted instructions to the prompt | GPT rewrites the full prompt guided by your feedback |
+| **Result** | Prompt grows slightly each iteration | Prompt is restructured and tightened each iteration |
+| **Cost** | Free, fully offline | One API call per review cycle |
+
+Both modes keep the full archive and stepping-stones mechanism.
+
+---
+
 ## Common Questions
 
 **Q: What is "fitness"?**
@@ -353,12 +489,32 @@ Yes — use the experiment script (`run_experiment.py`) which runs all 3 conditi
 
 ---
 
+**Q: What is "fitness" in the prompt engine?**
+Your rating normalised to 0.0–1.0. Rating 1 = fitness 0.0, rating 5 = fitness 1.0. The engine always keeps the highest-fitness prompt as the "best" and exports that.
+
+**Q: Does the prompt engine use the same archive as the research engine?**
+No — they are completely separate. The research engine evolves numerical weights; the prompt engine evolves prompt text. They share the same server but have independent state.
+
+**Q: What if I forget to submit a rating?**
+Nothing is lost — the prompt engine only advances when you call `/submit`. You can use the same active prompt for as many review cycles as you like before submitting.
+
+---
+
 ## Key Files to Read First
 
 If you want to understand the code, read these in order:
 
+**Research engine (numerical weights):**
 1. [backend/app/datasets.py](../backend/app/datasets.py) — the 30 repos used for training/testing (short, no dependencies)
 2. [backend/app/engine.py](../backend/app/engine.py) — the full evolutionary loop (the heart of the project)
-3. [backend/app/main.py](../backend/app/main.py) — the API that connects UI to engine
-4. [frontend/src/api.js](../frontend/src/api.js) — how the UI talks to the backend
-5. [scripts/run_experiment.py](../scripts/run_experiment.py) — how experiments are run in batch
+
+**Prompt engine (code-reviewer evolution):**
+
+3. [backend/app/prompt_engine.py](../backend/app/prompt_engine.py) — the prompt evolution loop
+4. [backend/app/prompts/mutate_reviewer_prompt.md](../backend/app/prompts/mutate_reviewer_prompt.md) — what the LLM is asked to do when mutating a prompt
+
+**Shared infrastructure:**
+
+5. [backend/app/main.py](../backend/app/main.py) — the API that connects everything
+6. [frontend/src/api.js](../frontend/src/api.js) — how the UI talks to the backend
+7. [scripts/run_experiment.py](../scripts/run_experiment.py) — how experiments are run in batch
