@@ -80,6 +80,23 @@ class OpenAIHyperAgentService:
         prompt = _load_prompt("propose_mutation.md")
         return self._json_response(prompt, payload)
 
+    def mutate_reviewer_prompt(self, parent: Any) -> dict[str, Any] | None:
+        """Propose an improved code-reviewer prompt based on a human rating + gaps."""
+        if not self.is_enabled:
+            return None
+
+        ev = parent.evaluation
+        payload = {
+            "current_prompt": parent.agent.prompt,
+            "rating": ev.rating,
+            "strengths": ev.strengths,
+            "gaps": ev.gaps,
+            "review_excerpt": ev.review_excerpt,
+            "codebase_ref": ev.codebase_ref,
+        }
+        prompt = _load_prompt("mutate_reviewer_prompt.md")
+        return self._json_response(prompt, payload)
+
     def review_repository(self, repo_url: str, repo_data: dict[str, Any]) -> dict[str, Any]:
         if not self.is_enabled:
             raise RuntimeError("OpenAI mode is not enabled.")

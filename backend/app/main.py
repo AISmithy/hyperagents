@@ -15,6 +15,7 @@ from .database import Database
 from .engine import HyperAgentEngine
 from .github_service import GitHubService
 from .openai_service import OpenAIHyperAgentService
+from .prompt_engine import PromptEngine
 from .settings import get_settings
 
 app = FastAPI(
@@ -35,6 +36,7 @@ llm_service = OpenAIHyperAgentService(settings)
 db = Database(settings.db_path)
 engine = HyperAgentEngine(llm_service=llm_service, db=db)
 github_service = GitHubService(token=settings.github_token)
+prompt_engine = PromptEngine(llm_service=llm_service)
 
 
 class RunRequest(BaseModel):
@@ -209,3 +211,96 @@ def review_repo(request: RepoReviewRequest) -> dict:
         return engine.review_repository(request.repo_url, repo_data)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Prompt Agent (self-improving code-reviewer prompt) ────────────────────────
+
+class PromptResetRequest(BaseModel):
+    seed_prompt: str = Field(
+        default="",
+        description="Initial prompt text. Leave empty to use the built-in default. "
+                    "Pass the contents of your code-reviewer.md here.",
+    )
+
+
+class SubmitReviewRequest(BaseModel):
+    review_text: str = Field(
+        min_length=10,
+        description="The full output of the review that was just run.",
+    )
+    rating: int = Field(
+        ge=1, le=5,
+        description="Your rating of the review quality: 1 (poor) to 5 (excellent).",
+    )
+    strengths: list[str] = Field(
+        default_factory=list,
+        description="What the review got right (used to guide mutation).",
+    )
+    gaps: list[str] = Field(
+        default_factory=list,
+        description="What the review missed or got wrong (used to guide mutation).",
+    )
+    codebase_ref: str = Field(
+        default="",
+        description="Free-text reference to the reviewed codebase, e.g. 'my-repo @ main'.",
+    )
+
+
+@app.get("/api/promptagent/state")
+def promptagent_state() -> dict:
+    """Return the current state of the prompt engine: active prompt, archive, history."""
+    return prompt_engine.snapshot()
+
+
+@app.post("/api/promptagent/reset")
+def promptagent_reset(request: PromptResetRequest = PromptResetRequest()) -> dict:
+    """Start a fresh run.  Pass your code-reviewer.md contents as seed_prompt."""
+    prompt_engine.reset(seed_prompt=request.seed_prompt or None)
+    return prompt_engine.snapshot()
+
+
+@app.post("/api/promptagent/submit")
+def promptagent_submit(request: SubmitReviewRequest) -> dict:
+    """Record the result of one real review cycle and get back an improved prompt.
+
+    Workflow
+    --------
+    1. Run your current active prompt against your codebase.
+    2. Read the review output.
+    3. Rate it 1–5 and note what it got right (strengths) and what it missed (gaps).
+    4. POST to this endpoint.
+    5. The response contains new_prompt — use it for the next review cycle.
+    6. Repeat.
+    """
+    try:
+        result = prompt_engine.submit_review(
+            review_text=request.review_text,
+            rating=request.rating,
+            strengths=request.strengths,
+            gaps=request.gaps,
+            codebase_ref=request.codebase_ref,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@app.get("/api/promptagent/export")
+def promptagent_export() -> dict:
+    """Return the best prompt found so far as plain text.
+
+    Use this to overwrite your code-reviewer.md:
+        curl .../api/promptagent/export | jq -r .prompt > code-reviewer.md
+    """
+    best = prompt_engine.best_entry
+    if best is None:
+        active = prompt_engine.active_prompt
+        return {"prompt": active, "source": "active (no reviews submitted yet)", "fitness": None}
+    return {
+        "prompt": best.agent.prompt,
+        "agent_id": best.agent.agent_id,
+        "generation": best.agent.generation,
+        "fitness": best.evaluation.fitness,
+        "rating": best.evaluation.rating,
+        "source": "best archived agent",
+    }
