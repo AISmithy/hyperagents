@@ -19,6 +19,11 @@ def _load_prompt(filename: str) -> str:
     return files("app.prompts").joinpath(filename).read_text(encoding="utf-8").strip()
 
 
+@lru_cache(maxsize=None)
+def _load_prompt_from(package: str, filename: str) -> str:
+    return files(package).joinpath(filename).read_text(encoding="utf-8").strip()
+
+
 class OpenAIHyperAgentService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -94,7 +99,7 @@ class OpenAIHyperAgentService:
             "review_excerpt": ev.review_excerpt,
             "codebase_ref": ev.codebase_ref,
         }
-        prompt = _load_prompt("mutate_reviewer_prompt.md")
+        prompt = _load_prompt_from("app.selfimprovingprompt.prompts", "mutate_agent_prompt.md")
         return self._json_response(prompt, payload)
 
     def review_repository(self, repo_url: str, repo_data: dict[str, Any]) -> dict[str, Any]:

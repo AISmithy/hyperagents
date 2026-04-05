@@ -15,7 +15,7 @@ from .database import Database
 from .engine import HyperAgentEngine
 from .github_service import GitHubService
 from .openai_service import OpenAIHyperAgentService
-from .prompt_engine import PromptEngine
+from .selfimprovingprompt import PromptEngine
 from .settings import get_settings
 
 app = FastAPI(

@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .openai_service import OpenAIHyperAgentService
+    from app.openai_service import OpenAIHyperAgentService
 
 LOG_PATH = pathlib.Path("results/prompt_runs.csv")
 
