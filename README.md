@@ -19,9 +19,10 @@ graph TB
     UI["Dashboard\nOverview · Archive · Agent Detail · Events · Runs · Live Review"]
   end
 
-  subgraph BE ["Backend  (FastAPI · :8011)"]
-    API["REST API\n/api/reset · /api/run · /api/archive\n/api/metrics · /api/runs"]
+  subgraph BE ["Backend  (FastAPI · :8000)"]
+    API["REST API\n/api/reset · /api/run · /api/archive\n/api/metrics · /api/runs\n/api/promptagent/*"]
     ENGINE["HyperAgentEngine"]
+    PENGINE["PromptEngine"]
     OAI["OpenAI Service\n(optional)"]
   end
 
@@ -40,10 +41,12 @@ graph TB
 
   UI        <-->|"HTTP / JSON"| API
   API       --> ENGINE
+  API       --> PENGINE
   ENGINE    --> HA
   ENGINE    --> ARCHIVE
   ENGINE    --> DS
   ENGINE    -.->|"optional"| OAI
+  PENGINE   -.->|"optional"| OAI
   ENGINE    -->|"persist"| DB
   SCRIPTS   -->|"direct import"| ENGINE
   SCRIPTS   --> CSV
@@ -92,6 +95,19 @@ graph LR
 
 ---
 
+## Two Engines
+
+This project ships two independent evolutionary engines that share the same server and OpenAI integration:
+
+| Engine | Task Policy | Evaluation signal | Use case |
+|---|---|---|---|
+| **HyperAgentEngine** | Numerical weights on 5 features | Accuracy on 30 synthetic repos | Research ablation experiments |
+| **PromptEngine** | Text prompt (e.g. `code-reviewer.md`) | Human rating 1–5 after a real review | Self-improving code reviewer agent |
+
+Both use the same archive + stepping-stones + meta-policy architecture. See [`docs/GUIDE.md`](docs/GUIDE.md) for a full walkthrough of both.
+
+---
+
 ## What Is Implemented
 
 **Core loop**
@@ -104,6 +120,14 @@ graph LR
 - `hyperagent` — full system (adaptive meta policy + archive)
 - `baseline` — frozen meta policy, archive enabled (isolates meta-policy contribution)
 - `no_archive` — adaptive meta policy, greedy parent selection (isolates archive contribution)
+
+**Prompt engine** (`prompt_engine.py`)
+- `PromptEngine` class: evolves a code-reviewer prompt based on human ratings (1–5) after real review cycles
+- Archive of every prompt version — stepping stones prevent getting stuck in a locally good but globally poor prompt
+- LLM mutation via `mutate_reviewer_prompt.md`: GPT rewrites the prompt guided by strengths, gaps, and rating
+- Heuristic fallback: appends gap-targeted instructions when OpenAI is not configured
+- REST API: `POST /api/promptagent/reset`, `POST /api/promptagent/submit`, `GET /api/promptagent/export`
+- Logs to `results/prompt_runs.csv`
 
 **Experiment infrastructure**
 - Multi-seed runner (`scripts/run_experiment.py`): 3 conditions × 5 seeds × N iterations → `results/raw_metrics.csv`
@@ -131,13 +155,17 @@ graph LR
 hyperagents/
 ├── backend/
 │   ├── app/
-│   │   ├── datasets.py          # 20 train + 10 test repo fixtures
-│   │   ├── database.py          # SQLModel tables + Database class
-│   │   ├── engine.py            # HyperAgentEngine — core evolutionary loop
-│   │   ├── main.py              # FastAPI app + route handlers
-│   │   ├── openai_service.py    # Optional LLM mutation planner
-│   │   ├── settings.py          # Env-driven config
-│   │   └── prompts/             # Prompt templates for OpenAI calls
+│   │   ├── datasets.py               # 20 train + 10 test repo fixtures
+│   │   ├── database.py               # SQLModel tables + Database class
+│   │   ├── engine.py                 # HyperAgentEngine — weight-based loop
+│   │   ├── prompt_engine.py          # PromptEngine — prompt-based loop
+│   │   ├── main.py                   # FastAPI app + route handlers
+│   │   ├── openai_service.py         # Optional LLM mutation planner
+│   │   ├── settings.py               # Env-driven config
+│   │   └── prompts/
+│   │       ├── propose_mutation.md        # LLM prompt for weight mutation
+│   │       ├── mutate_reviewer_prompt.md  # LLM prompt for prompt mutation
+│   │       └── review_repository.md       # LLM prompt for live repo review
 │   └── pyproject.toml
 ├── frontend/
 │   └── src/
@@ -148,58 +176,74 @@ hyperagents/
 │   ├── run_experiment.py        # Multi-seed ablation runner
 │   └── plot_results.py          # Matplotlib learning curves + meta drift
 ├── docs/
+│   ├── GUIDE.md                 # Beginner's guide (start here)
 │   ├── architecture.md          # Full architecture reference
 │   └── methods.md               # Methods section draft (arXiv paper)
 ├── results/
 │   ├── raw_metrics.csv          # Pre-generated: 3 conditions × 5 seeds × 30 iter
+│   ├── runs.csv                 # Per-iteration log from HyperAgentEngine
+│   ├── prompt_runs.csv          # Per-review log from PromptEngine
 │   ├── learning_curves.png      # Train + test accuracy panels
 │   └── meta_policy_drift.png    # Weight step / threshold step / exploration scale
-├── run.ps1                      # One-command local start (Windows)
-└── stop.ps1                     # One-command local stop
+└── hyperagents.db               # SQLite database (auto-created)
 ```
 
 ---
 
 ## Quick Start
 
-### Option A — one command (Windows)
-
-```powershell
-./run.ps1
-```
-
-Starts backend and frontend together. To stop:
-
-```powershell
-./stop.ps1
-```
-
-Default URLs:
-- Frontend: `http://127.0.0.1:4173`
-- Backend API: `http://127.0.0.1:8011/api`
-
-The script finds Python 3.11+ and Node.js, installs missing dependencies, loads `.env.local` if present, and saves logs and PIDs under `.run/`.
-
-### Option B — manual
+> Full step-by-step setup with screenshots and explanations: [`docs/GUIDE.md`](docs/GUIDE.md)
 
 **Backend** (Python 3.11+):
 
-```powershell
+```bash
 cd backend
-py -3.11 -m venv .venv
-.venv\Scripts\Activate.ps1
 pip install -e .
-uvicorn app.main:app --reload --port 8011
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 **Frontend** (Node.js 20+):
 
-```powershell
+```bash
 cd frontend
 npm install
-$env:VITE_API_BASE="http://127.0.0.1:8011/api"
-npm run dev -- --port 4173
+npm run dev -- --port 5173
 ```
+
+Open **http://localhost:5173** in your browser.
+
+Default API base: `http://localhost:5173/api` (proxied through Vite to `127.0.0.1:8000`).
+
+---
+
+## Self-Improving Code Reviewer
+
+Load your `code-reviewer.md`, run a review, rate it, get an improved prompt back:
+
+```bash
+# 1. Load your existing reviewer prompt
+curl -X POST http://localhost:8000/api/promptagent/reset \
+  -H "Content-Type: application/json" \
+  -d "{\"seed_prompt\": \"$(cat code-reviewer.md)\"}"
+
+# 2. After running a review, submit your rating and feedback
+curl -X POST http://localhost:8000/api/promptagent/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "review_text": "...review output...",
+    "rating": 3,
+    "strengths": ["caught SQL injection"],
+    "gaps": ["missed missing tests in auth module"],
+    "codebase_ref": "my-repo @ main"
+  }'
+
+# 3. Export the best prompt back to your file
+curl http://localhost:8000/api/promptagent/export \
+  | python -c "import sys,json; print(json.load(sys.stdin)['prompt'])" \
+  > code-reviewer.md
+```
+
+See [`docs/GUIDE.md`](docs/GUIDE.md) for the full workflow, rating guide, and API reference.
 
 ---
 
@@ -224,15 +268,20 @@ Key result: the **No Archive** condition plateaus at 80% train accuracy while bo
 
 ## OpenAI Integration (optional)
 
-Copy `.env.example` to `.env.local` and set:
+Create `backend/.env.local` (or set environment variables) with:
 
-```powershell
+```
 OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-4o-mini
 HYPERAGENTS_USE_OPENAI=1
 ```
 
-When enabled, the backend uses the OpenAI API for mutation planning and the Live Review tab. Without those variables the system runs fully offline using the deterministic heuristic engine.
+When enabled, OpenAI is used for:
+- **Weight mutation** — GPT proposes improved feature weights and meta-policy parameters
+- **Prompt mutation** — GPT rewrites your code-reviewer prompt based on your rating and gaps
+- **Live Review tab** — GPT scores a real GitHub repository
+
+Without these variables both engines run fully offline using deterministic heuristics — no functionality is lost, mutations are just rule-based rather than LLM-guided.
 
 > Do not paste API keys into chat, code, or git history. If a key has been exposed, revoke it immediately.
 
@@ -253,6 +302,7 @@ That is the minimal practical instantiation of the hyperagent idea.
 
 ## Extending the Project
 
+- **Add a UI for the prompt engine** — the backend API is complete; a tab in the React dashboard would let you manage the reviewer prompt without curl
 - Replace the heuristic mutation operator with an LLM-driven one (prompts are already templated in `backend/app/prompts/`)
 - Swap the synthetic dataset for a real code-quality benchmark
 - Add MAP-Elites or quality-diversity selection for broader archive coverage
