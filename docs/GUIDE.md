@@ -340,13 +340,12 @@ HYPERAGENTS_USE_OPENAI=1
 
 ---
 
-## Self-Improving Code Reviewer (Prompt Engine)
+## Self-Improving Prompt Engine
 
-This is a second, separate engine built on the same HyperAgent principles — but instead of evolving numerical weights, it evolves the **text of a code reviewer prompt** (like a `code-reviewer.md` file).
+> Full documentation, CLI reference, API reference, and FAQ are in
+> [backend/app/selfimprovingprompt/docs/](../backend/app/selfimprovingprompt/docs/)
 
-### The idea
-
-Every time you use a code reviewer agent on your codebase, you can rate how useful the review was. The engine uses that rating to automatically improve the prompt for next time.
+This is a second, separate engine built on the same HyperAgent principles — but instead of evolving numerical weights, it evolves the **text of any agent prompt** (like a `code-reviewer.md` or any other `.md` agent file).
 
 ### The cycle — as a diagram
 
@@ -396,153 +395,9 @@ Every time you use a code reviewer agent on your codebase, you can rate how usef
 
 Every version of the prompt is kept in the **archive** — the same stepping-stones mechanism as the research engine. If a new version turns out worse, the system can build on an earlier good version rather than getting stuck.
 
----
 
-### One-time setup (do this once)
-
-**Step 1 — Tell the backend where your agent file lives**
-
-Add this to `backend/.env.local` (create the file if it does not exist):
-
-```
-REVIEWER_PROMPT_PATH=/full/path/to/code-reviewer.md
-```
-
-This is the only configuration needed. After every review submission, the backend writes the improved prompt directly to that file — no manual export step.
-
-**Step 2 — Load your current agent into the engine**
-
-```bash
-python scripts/reviewer_cycle.py init --prompt-file code-reviewer.md
-```
-
-You should see:
-```
-Loaded prompt from code-reviewer.md (843 chars)
-
-Engine initialised.
-  Active agent : pagent-000
-  Auto write-back configured → /path/to/code-reviewer.md
-```
-
-You only need to run `init` again if you want to start a completely fresh run (clears the archive).
-
----
-
-### Each review cycle (repeat this forever)
-
-**Step 3 — Run a review using your current agent**
-
-Use whatever tool you normally use with your `code-reviewer.md`. Save the output to a file:
-
-```bash
-# example with Claude Code — save the review output to a file
-cat code-reviewer.md | your-review-tool > review_output.txt
-```
-
-**Step 4 — Submit the result**
-
-```bash
-python scripts/reviewer_cycle.py submit --review-file review_output.txt
-```
-
-The CLI will ask you interactively:
-```
-Rate this review 1–5 (1=poor, 5=excellent): 3
-
-What did the review get RIGHT? (one per line, blank line to finish)
-  + caught SQL injection in login.py
-  +
-
-What did the review MISS or got wrong? (one per line, blank line to finish)
-  - missed missing tests in auth module
-  - no coverage of error handling paths
-  -
-
-Submitting…
-
-  Iteration    : 1
-  Rated agent  : pagent-000
-  Fitness      : 0.50  (rating 3/5)
-  New agent    : pagent-001
-
-  Prompt written back → /path/to/code-reviewer.md ✓
-```
-
-Your `code-reviewer.md` is now updated. Run the next review with the new version.
-
-**Or fully non-interactive (for scripted pipelines):**
-
-```bash
-python scripts/reviewer_cycle.py submit \
-  --review-file review_output.txt \
-  --rating 3 \
-  --strengths "caught SQL injection" \
-  --gaps "missed auth tests" "no error handling coverage" \
-  --codebase-ref "my-repo @ main" \
-  --non-interactive
-```
-
----
-
-### Other useful commands
-
-```bash
-# See all past review iterations and ratings
-python scripts/reviewer_cycle.py status
-
-# Print the best prompt to stdout (manual export if needed)
-python scripts/reviewer_cycle.py best > code-reviewer.md
-```
-
----
-
-### Using the raw API instead of the CLI
-
-If you prefer curl directly, all endpoints are under `/api/promptagent/`:
-
-| Method | Endpoint | What it does |
-|---|---|---|
-| `POST` | `/api/promptagent/reset` | Load seed prompt, start fresh run |
-| `POST` | `/api/promptagent/submit` | Submit rating + gaps, get improved prompt |
-| `GET` | `/api/promptagent/state` | Full engine state: archive, history, active prompt |
-| `GET` | `/api/promptagent/export` | Best prompt as JSON (pipe to your .md file) |
-
-Submit fields:
-
-| Field | Required | Description |
-|---|---|---|
-| `review_text` | Yes | The full output of the review |
-| `rating` | Yes | 1 (poor) to 5 (excellent) |
-| `strengths` | No | List of things the review got right |
-| `gaps` | No | List of things it missed — drives the mutation |
-| `codebase_ref` | No | Label for the codebase, e.g. `my-repo @ main` |
-
----
-
-### Rating guide
-
-| Rating | Meaning |
-|---|---|
-| 1 | The review missed most issues or was too vague to be useful |
-| 2 | Some useful findings but significant gaps |
-| 3 | Decent review, a few important things missed |
-| 4 | Good review, minor gaps only |
-| 5 | Excellent — caught everything important, clear and actionable |
-
-The gaps you list at rating 3 or below are the most important input — they directly tell the engine what to fix in the next prompt version.
-
----
-
-### With vs without OpenAI
-
-| | Without OpenAI | With OpenAI |
-|---|---|---|
-| **How mutation works** | Appends gap-targeted instructions to the prompt | GPT rewrites the full prompt guided by your feedback |
-| **Result** | Prompt grows slightly each iteration | Prompt is restructured and tightened each iteration |
-| **Cost** | Free, fully offline | One API call per review cycle |
-
-Both modes keep the full archive and stepping-stones mechanism.
+For setup, CLI usage, API reference, and FAQ see
+[backend/app/selfimprovingprompt/docs/GUIDE.md](../backend/app/selfimprovingprompt/docs/GUIDE.md).
 
 ---
 
@@ -566,15 +421,6 @@ Yes — use the experiment script (`run_experiment.py`) which runs all 3 conditi
 
 ---
 
-**Q: What is "fitness" in the prompt engine?**
-Your rating normalised to 0.0–1.0. Rating 1 = fitness 0.0, rating 5 = fitness 1.0. The engine always keeps the highest-fitness prompt as the "best" and exports that.
-
-**Q: Does the prompt engine use the same archive as the research engine?**
-No — they are completely separate. The research engine evolves numerical weights; the prompt engine evolves prompt text. They share the same server but have independent state.
-
-**Q: What if I forget to submit a rating?**
-Nothing is lost — the prompt engine only advances when you call `/submit`. You can use the same active prompt for as many review cycles as you like before submitting.
-
 ---
 
 ## Key Files to Read First
@@ -585,14 +431,15 @@ If you want to understand the code, read these in order:
 1. [backend/app/datasets.py](../backend/app/datasets.py) — the 30 repos used for training/testing (short, no dependencies)
 2. [backend/app/engine.py](../backend/app/engine.py) — the full evolutionary loop (the heart of the project)
 
-**Prompt engine (code-reviewer evolution):**
+**Prompt engine (self-improving agent prompts):**
 
-3. [backend/app/prompt_engine.py](../backend/app/prompt_engine.py) — the prompt evolution loop
-4. [backend/app/prompts/mutate_reviewer_prompt.md](../backend/app/prompts/mutate_reviewer_prompt.md) — what the LLM is asked to do when mutating a prompt
+3. [backend/app/selfimprovingprompt/engine.py](../backend/app/selfimprovingprompt/engine.py) — the prompt evolution loop
+4. [backend/app/selfimprovingprompt/prompts/mutate_agent_prompt.md](../backend/app/selfimprovingprompt/prompts/mutate_agent_prompt.md) — what the LLM is asked to do when mutating a prompt
+5. [backend/app/selfimprovingprompt/cli.py](../backend/app/selfimprovingprompt/cli.py) — the CLI tool
+6. [backend/app/selfimprovingprompt/docs/GUIDE.md](../backend/app/selfimprovingprompt/docs/GUIDE.md) — full prompt engine guide
 
 **Shared infrastructure:**
 
-5. [backend/app/main.py](../backend/app/main.py) — the API that connects everything
-6. [frontend/src/api.js](../frontend/src/api.js) — how the UI talks to the backend
-7. [scripts/run_experiment.py](../scripts/run_experiment.py) — how experiments are run in batch
-8. [scripts/reviewer_cycle.py](../scripts/reviewer_cycle.py) — the automated reviewer CLI
+7. [backend/app/main.py](../backend/app/main.py) — the API that connects everything
+8. [frontend/src/api.js](../frontend/src/api.js) — how the UI talks to the backend
+9. [scripts/run_experiment.py](../scripts/run_experiment.py) — how experiments are run in batch

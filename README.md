@@ -121,13 +121,11 @@ Both use the same archive + stepping-stones + meta-policy architecture. See [`do
 - `baseline` — frozen meta policy, archive enabled (isolates meta-policy contribution)
 - `no_archive` — adaptive meta policy, greedy parent selection (isolates archive contribution)
 
-**Prompt engine** (`prompt_engine.py`)
-- `PromptEngine` class: evolves a code-reviewer prompt based on human ratings (1–5) after real review cycles
-- Archive of every prompt version — stepping stones prevent getting stuck in a locally good but globally poor prompt
-- LLM mutation via `mutate_reviewer_prompt.md`: GPT rewrites the prompt guided by strengths, gaps, and rating
-- Heuristic fallback: appends gap-targeted instructions when OpenAI is not configured
-- REST API: `POST /api/promptagent/reset`, `POST /api/promptagent/submit`, `GET /api/promptagent/export`
-- Logs to `results/prompt_runs.csv`
+**Self-improving prompt engine** (`backend/app/selfimprovingprompt/`)
+- Evolves any agent defined as a `.md` prompt file based on human ratings (1–5) after real usage cycles
+- Archive of every prompt version — stepping stones prevent local optima
+- LLM or heuristic mutation; REST API + CLI included
+- Full docs: [`backend/app/selfimprovingprompt/docs/`](backend/app/selfimprovingprompt/docs/)
 
 **Experiment infrastructure**
 - Multi-seed runner (`scripts/run_experiment.py`): 3 conditions × 5 seeds × N iterations → `results/raw_metrics.csv`
@@ -158,14 +156,20 @@ hyperagents/
 │   │   ├── datasets.py               # 20 train + 10 test repo fixtures
 │   │   ├── database.py               # SQLModel tables + Database class
 │   │   ├── engine.py                 # HyperAgentEngine — weight-based loop
-│   │   ├── prompt_engine.py          # PromptEngine — prompt-based loop
 │   │   ├── main.py                   # FastAPI app + route handlers
 │   │   ├── openai_service.py         # Optional LLM mutation planner
 │   │   ├── settings.py               # Env-driven config
-│   │   └── prompts/
-│   │       ├── propose_mutation.md        # LLM prompt for weight mutation
-│   │       ├── mutate_reviewer_prompt.md  # LLM prompt for prompt mutation
-│   │       └── review_repository.md       # LLM prompt for live repo review
+│   │   ├── prompts/
+│   │   │   ├── propose_mutation.md        # LLM prompt for weight mutation
+│   │   │   └── review_repository.md       # LLM prompt for live repo review
+│   │   └── selfimprovingprompt/      # Self-improving prompt engine (own docs inside)
+│   │       ├── engine.py
+│   │       ├── cli.py
+│   │       ├── prompts/
+│   │       │   └── mutate_agent_prompt.md
+│   │       └── docs/
+│   │           ├── README.md
+│   │           └── GUIDE.md
 │   └── pyproject.toml
 ├── frontend/
 │   └── src/
@@ -216,34 +220,10 @@ Default API base: `http://localhost:5173/api` (proxied through Vite to `127.0.0.
 
 ---
 
-## Self-Improving Code Reviewer
+## Self-Improving Prompt Engine
 
-Load your `code-reviewer.md`, run a review, rate it, get an improved prompt back:
-
-```bash
-# 1. Load your existing reviewer prompt
-curl -X POST http://localhost:8000/api/promptagent/reset \
-  -H "Content-Type: application/json" \
-  -d "{\"seed_prompt\": \"$(cat code-reviewer.md)\"}"
-
-# 2. After running a review, submit your rating and feedback
-curl -X POST http://localhost:8000/api/promptagent/submit \
-  -H "Content-Type: application/json" \
-  -d '{
-    "review_text": "...review output...",
-    "rating": 3,
-    "strengths": ["caught SQL injection"],
-    "gaps": ["missed missing tests in auth module"],
-    "codebase_ref": "my-repo @ main"
-  }'
-
-# 3. Export the best prompt back to your file
-curl http://localhost:8000/api/promptagent/export \
-  | python -c "import sys,json; print(json.load(sys.stdin)['prompt'])" \
-  > code-reviewer.md
-```
-
-See [`docs/GUIDE.md`](docs/GUIDE.md) for the full workflow, rating guide, and API reference.
+Evolves any agent `.md` file based on human ratings after real usage cycles.
+See [`backend/app/selfimprovingprompt/docs/README.md`](backend/app/selfimprovingprompt/docs/README.md) for the cycle diagram, setup, and CLI reference.
 
 ---
 
