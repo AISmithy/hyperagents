@@ -38,6 +38,7 @@ class Settings:
     use_openai: bool
     github_token: str
     db_path: str
+    reviewer_prompt_path: str   # Path to code-reviewer.md; written after every submit
 
     @property
     def has_api_key(self) -> bool:
@@ -55,4 +56,5 @@ def get_settings() -> Settings:
         use_openai=_flag("HYPERAGENTS_USE_OPENAI", default=False),
         github_token=os.getenv("GITHUB_TOKEN", "").strip(),
         db_path=os.getenv("HYPERAGENTS_DB_PATH", default_db).strip(),
+        reviewer_prompt_path=os.getenv("REVIEWER_PROMPT_PATH", "").strip(),
     )

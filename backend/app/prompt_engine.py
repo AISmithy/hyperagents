@@ -110,10 +110,17 @@ class PromptEngine:
       2. Mutate → produce a candidate improved prompt via LLM.
       3. Store both in the archive.
       4. The new prompt becomes the active one for the next review.
+      5. If write_back_path is set, the best prompt is written to that file
+         automatically — no manual export step needed.
     """
 
-    def __init__(self, llm_service: OpenAIHyperAgentService | None = None) -> None:
+    def __init__(
+        self,
+        llm_service: OpenAIHyperAgentService | None = None,
+        write_back_path: str = "",
+    ) -> None:
         self._llm = llm_service
+        self._write_back_path = pathlib.Path(write_back_path) if write_back_path else None
         self._next_id = 0
         self.archive: list[PromptArchiveEntry] = []
         self.history: list[dict[str, Any]] = []   # per-iteration summary log
@@ -192,6 +199,7 @@ class PromptEngine:
 
         self._record_history(entry, next_agent)
         self._log_csv(entry)
+        self._write_back(next_agent)
 
         return {
             "iteration": self.iterations_completed,
@@ -210,6 +218,7 @@ class PromptEngine:
             "iterations_completed": self.iterations_completed,
             "active_prompt": self._current_agent.prompt if self._current_agent else "",
             "active_agent_id": self._current_agent.agent_id if self._current_agent else None,
+            "write_back_path": str(self._write_back_path) if self._write_back_path else None,
             "best_agent": self._serialise_entry(best) if best else None,
             "archive": [self._serialise_entry(e) for e in self.archive],
             "history": self.history,
@@ -303,6 +312,23 @@ class PromptEngine:
             "best_fitness_so_far": best.evaluation.fitness if best else 0.0,
             "archive_size": len(self.archive),
         })
+
+    def _write_back(self, next_agent: PromptAgent) -> None:
+        """Write the best prompt to the configured file path (if set).
+
+        Uses the next (mutated) agent's prompt rather than the archive best
+        so the file always reflects the latest improvement, not a historical peak.
+        If the file's parent directory does not exist it is created.
+        """
+        if self._write_back_path is None:
+            return
+        try:
+            self._write_back_path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_back_path.write_text(next_agent.prompt, encoding="utf-8")
+        except OSError as exc:
+            # Non-fatal — log but do not break the API response
+            import warnings
+            warnings.warn(f"PromptEngine write-back failed: {exc}", stacklevel=2)
 
     def _log_csv(self, entry: PromptArchiveEntry) -> None:
         LOG_PATH.parent.mkdir(exist_ok=True)

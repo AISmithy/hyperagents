@@ -36,7 +36,10 @@ llm_service = OpenAIHyperAgentService(settings)
 db = Database(settings.db_path)
 engine = HyperAgentEngine(llm_service=llm_service, db=db)
 github_service = GitHubService(token=settings.github_token)
-prompt_engine = PromptEngine(llm_service=llm_service)
+prompt_engine = PromptEngine(
+    llm_service=llm_service,
+    write_back_path=settings.reviewer_prompt_path,
+)
 
 
 class RunRequest(BaseModel):
